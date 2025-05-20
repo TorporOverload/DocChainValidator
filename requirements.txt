@@ -1,0 +1,2 @@
+pypdf
+cryptography==45.0.2
