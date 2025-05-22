@@ -203,7 +203,7 @@ def get_keypair_by_username(username, Key_path=".\\data\\keys"):
 
     
     
-def generate_dp_page_signature(page_text, username, doc_title, page_number):
+def generate_dp_page_signature(page_text, doc_title, page_number):
     """
     Generates a page signature using Dynamic Programming and Hashing.
     """
@@ -211,13 +211,13 @@ def generate_dp_page_signature(page_text, username, doc_title, page_number):
     page_chunks = [page_text[i:i+chunk_size] for i in range(0, len(page_text), chunk_size)]
     
     if not page_text: 
-        empty_page_material = (username + doc_title + str(page_number) + DP_SEED_CONSTANT + "EMPTY_PAGE_PLACEHOLDER").encode('utf-8')
+        empty_page_material = (doc_title + str(page_number) + DP_SEED_CONSTANT + "EMPTY_PAGE_PLACEHOLDER").encode('utf-8')
         digest = hashes.Hash(hashes.SHA256())
         digest.update(empty_page_material) 
         hash_bytes = digest.finalize()
         return hash_bytes.hex()
     
-    initial_seed = (username + doc_title + str(page_number) + DP_SEED_CONSTANT).encode('utf-8')
+    initial_seed = (doc_title + str(page_number) + DP_SEED_CONSTANT).encode('utf-8')
     dp_signature = hashes.Hash(hashes.SHA256())
     dp_signature.update(initial_seed)
     dp_signature = dp_signature.finalize()

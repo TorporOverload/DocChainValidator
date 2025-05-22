@@ -1,8 +1,10 @@
 import hashlib # For SHA-256
 import time
 import json
-
-
+from signature import verify_signature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
+from signature import generate_dp_page_signature
 class Block:
     def __init__(self, index, previous_hash, timestamp, data, signature, nonce=0):
         self.index = index
@@ -12,25 +14,36 @@ class Block:
         self.data = data # The data stored in the block (e.g., page content, page number)
         self.signature = signature # Signature of the 'data'
         self.nonce = nonce # The nonce found by Proof of Work
-
-        # The block's hash is calculated after all attributes, including the correct nonce, are set.
-        # It will be set explicitly after PoW.
         self.current_hash = None # Initialize and set after PoW
 
     def calculate_hash(self):
         """Calculates the hash of the block's content."""
+        # Ensure data (if a dict) is serialized consistently
+        if isinstance(self.data, dict):
+            data_str = json.dumps(self.data, sort_keys=True, separators=(',', ':'))
+        else:
+            data_str = str(self.data)
+
         block_content = (str(self.index) +
                          str(self.previous_hash) +
                          str(self.timestamp) +
                          str(self.version) +
-                         json.dumps(self.data, sort_keys=True, separators=(',', ':')) +
+                         data_str +
                          str(self.signature) +
                          str(self.nonce))
-        return hashlib.sha256(block_content.encode('utf-8')).hexdigest()
+        
+        first_hash = hashlib.sha256(block_content.encode('utf-8')).digest()
+        double_hash = hashlib.sha256(first_hash).hexdigest()
+        return double_hash
 
 
     def __str__(self):
-        data_str = json.dumps(self.data, indent=4)  
+        """String representation of the block."""
+        if isinstance(self.data, dict):
+            data_str = json.dumps(self.data, indent=4, sort_keys=True)
+        else:
+            data_str = str(self.data)
+            
         return (f"Block {self.index}:\n"
                 f"  Version: {self.version}\n"
                 f"  Timestamp: {self.timestamp}\n"
@@ -42,19 +55,20 @@ class Block:
 
 
 class Blockchain:
-    def __init__(self, difficulty=3): # Difficulty: number of leading binary zeros
+    def __init__(self, difficulty=3):
         self.chain = []
-        self.difficulty = difficulty
+        self.difficulty_string = '0' * difficulty 
         self._create_genesis_block()
         print("Blockchain Initialized.")
+        
+        self.doc_index = {} # Dictionary to store document titles and their corresponding blocks by block index
 
     def _create_genesis_block(self):
         """Creates the first block in the blockchain (Genesis Block)."""
         genesis_timestamp = int(time.time())
-        genesis_data = "Genesis Block"
-        genesis_signature = "N/A"
+        genesis_data = {"message": "Genesis Block"} 
+        genesis_signature = "N/A_GENESIS_SIGNATURE"
         
-        # Create a temporary genesis block to find its nonce and hash
         temp_genesis_block = Block(
             index=0,
             previous_hash="0", 
@@ -64,7 +78,6 @@ class Blockchain:
             nonce=0
         )
 
-        # Perform Proof of Work for the genesis block
         mined_nonce = self._proof_of_work(temp_genesis_block)
         temp_genesis_block.nonce = mined_nonce
         temp_genesis_block.current_hash = temp_genesis_block.calculate_hash() 
@@ -72,6 +85,29 @@ class Blockchain:
         self.chain.append(temp_genesis_block)
         print("Genesis Block Created:")
         print(temp_genesis_block)
+        
+    def add_block_to_index(self, block):
+        """Adds a block to the document index."""
+        if not isinstance(block, Block):
+            print("Error: Invalid block type.")
+            return None
+        if not block.data or 'title' not in block.data:
+            print("Error: Block data is missing or does not contain a title.")
+            return None
+        
+        title = block.data['title']
+        if title not in self.doc_index:
+            self.doc_index[title] = []
+        self.doc_index[title].append(block)
+        self.doc_index[title].sort(key=lambda b: b.index)  # Sort blocks by index for each title
+        print(f"Block {block.index} added to index for document '{title}'.")
+        
+    def get_blocks_by_title(self, title):
+        """Returns all blocks associated with a given document title."""
+        if title not in self.doc_index:
+            print(f"No blocks found for document '{title}'.")
+            return []
+        return self.doc_index[title]
 
     def get_latest_block(self):
         """Returns the last block in the chain."""
@@ -85,7 +121,10 @@ class Blockchain:
         if not latest_block:
             print("Error: Genesis block not found. Cannot add new block.")
             return None
-
+        if not isinstance(data, dict):
+            print("Error: Data must be a dictionary.")
+            return None
+        
         new_index = latest_block.index + 1
         new_timestamp = int(time.time())
         previous_hash = latest_block.current_hash
@@ -99,106 +138,118 @@ class Blockchain:
             nonce=0 
         )
 
-        # Perform Proof of Work for the new block
         mined_nonce = self._proof_of_work(new_block)
         new_block.nonce = mined_nonce
-        new_block.current_hash = new_block.calculate_hash() # Calculate final hash with correct nonce
+        new_block.current_hash = new_block.calculate_hash() 
 
-        # Basic validation before adding
         if self._is_new_block_valid(new_block, latest_block):
             self.chain.append(new_block)
             print(f"Block #{new_block.index} added to the blockchain.")
-            print(new_block)
+            self.add_block_to_index(new_block)
+            # print(new_block)
             return new_block
         else:
-            print(f"Error: New block #{new_block.index} is invalid. Not added.")
+            print(f"Error: New block #{new_block.index} with data '{new_block.data}' was invalid. Not added.")
             return None
 
     def _proof_of_work(self, block_to_mine):
         """
         Simple Proof of Work Algorithm:
-        - Find a number 'nonce' such that the hash of the (block's content + nonce)
-          has a certain number of leading zeros in its binary representation.
-        - Modifies the block_to_mine's nonce attribute during the process.
+        - Find a 'nonce' such that the hex hash of (block's content + nonce)
+          has a certain number of leading zeros.
         """
-        print(f"Mining block {block_to_mine.index} with data: '{block_to_mine.data}'...")
+        
+        data_preview =  json.dumps(block_to_mine.data, sort_keys=True, separators=(',', ':'))
+        if len(data_preview) > 50:
+            data_preview = data_preview[:47] + "..."
+        print(f"Mining block {block_to_mine.index} with data: '{data_preview}'...")
+        
         nonce_to_try = 0
         while True:
-            block_to_mine.nonce = nonce_to_try # Set the nonce to try
+            block_to_mine.nonce = nonce_to_try
             calculated_hash = block_to_mine.calculate_hash()
-            
-            # Convert hex hash to binary string, ensuring it's padded to 256 bits
-            binary_hash = bin(int(calculated_hash, 16))[2:].zfill(256)
 
-            if binary_hash.startswith('0' * self.difficulty):
+            if calculated_hash.startswith(self.difficulty_string):
                 print(f"Block {block_to_mine.index} Mined! Nonce: {nonce_to_try}, Hash: {calculated_hash}")
-                return nonce_to_try # Return the successful nonce
+                return nonce_to_try
             nonce_to_try += 1
 
     def _is_new_block_valid(self, new_block, previous_block):
         """Validates a new block before adding it to the chain."""
         if new_block.index != previous_block.index + 1:
-            print(f"Validation Error: Invalid index. Expected {previous_block.index + 1}, got {new_block.index}")
+            print(f"Validation Error (Block {new_block.index}): Invalid index. Expected {previous_block.index + 1}, got {new_block.index}")
             return False
         if new_block.previous_hash != previous_block.current_hash:
-            print("Validation Error: Previous hash mismatch.")
+            print(f"Validation Error (Block {new_block.index}): Previous hash mismatch.")
             return False
         
-        # Check if the block's hash is correct based on its content (including the PoW nonce)
         if new_block.current_hash != new_block.calculate_hash():
-            print("Validation Error: Block's current_hash is incorrect.")
+            print(f"Validation Error (Block {new_block.index}): Block's current_hash is incorrect (tampered or PoW error).")
             return False
 
-        # Check if the PoW was actually met for the block's hash
-        binary_hash = bin(int(new_block.current_hash, 16))[2:].zfill(256)
-        if not binary_hash.startswith('0' * self.difficulty):
-            print("Validation Error: Proof of Work not met for the block's hash.")
+        # Check if the PoW was actually met for the block's HEX hash
+        if not new_block.current_hash.startswith(self.difficulty_string):
+            print(f"Validation Error (Block {new_block.index}): Proof of Work not met for the block's hash. Expected prefix '{self.difficulty_string}'.")
             return False
             
-        curret_time = int(time.time())
-        if new_block.timestamp > curret_time:
-            print("Validation Error: Block timestamp is in the future.")
+        current_time_check = int(time.time())
+        if new_block.timestamp > current_time_check + 60: # in case of client clock innacuracy
+            print(f"Validation Error (Block {new_block.index}): Block timestamp {new_block.timestamp} is too far in the future compared to current time {current_time_check}.")
             return False
         
         if new_block.timestamp < previous_block.timestamp:
-            print("Validation Error: Block timestamp is not greater than the previous block's timestamp.")
+            print(f"Validation Error (Block {new_block.index}): Block timestamp {new_block.timestamp} is less than the previous block's timestamp {previous_block.timestamp}.")
+            return False
+        
+        pem_public_key_str = new_block.data.get('public_key')
+        
+        if not pem_public_key_str:
+            print(f"Validation Error (Block {new_block.index}): No public key found in block data.")
+            return False
+        
+        public_key = serialization.load_pem_public_key(
+            pem_public_key_str.encode('utf-8'),
+            backend=default_backend()
+            )
+        
+        
+        dp_signature = generate_dp_page_signature(
+            new_block.data['content'],
+            new_block.data['title'],
+            new_block.data['page'] + 1
+        )
+        if not verify_signature(dp_signature, new_block.signature, public_key):
+            print(f"Validation Error (Block {new_block.index}): Signature verification failed.")
             return False
         
         return True
 
     def is_chain_valid(self):
         """Validates the integrity of the entire blockchain."""
+        if not self.chain:
+            print("Chain is empty.")
+            return True 
+
+        # Check genesis block first
+        genesis_block = self.chain[0]
+        if genesis_block.index != 0:
+            print(f"Chain Error: Genesis Block index is not 0.")
+            return False
+        if genesis_block.current_hash != genesis_block.calculate_hash(): # Recalculate to check for tampering
+            print(f"Chain Error: Genesis Block {genesis_block.index} hash is tampered.")
+            return False
+        if not genesis_block.current_hash.startswith(self.difficulty_string): # Check PoW
+            print(f"Chain Error: Proof of Work not met for Genesis Block {genesis_block.index}. Expected prefix '{self.difficulty_string}'.")
+            return False
+
+        # Check rest of the chain
         for i in range(1, len(self.chain)):
             current_block = self.chain[i]
             previous_block = self.chain[i-1]
-
-            # Check if current block's hash is correctly calculated
-            if current_block.current_hash != current_block.calculate_hash():
-                print(f"Chain Error: Block {current_block.index} hash is tampered.")
-                return False
             
-            # Check if current block points to the correct previous block's hash
-            if current_block.previous_hash != previous_block.current_hash:
-                print(f"Chain Error: Block {current_block.index} previous_hash mismatch.")
-                return False
-
-            # Check if the PoW was met for each block's hash
-            binary_hash = bin(int(current_block.current_hash, 16))[2:].zfill(256)
-            if not binary_hash.startswith('0' * self.difficulty):
-                print(f"Chain Error: Proof of Work not met for Block {current_block.index}.")
-                return False
-        
-        # Also check the genesis block's own integrity (PoW)
-        if self.chain:
-            genesis_block = self.chain[0]
-            if genesis_block.current_hash != genesis_block.calculate_hash():
-                 print(f"Chain Error: Genesis Block {genesis_block.index} hash is tampered.")
+            if not self._is_new_block_valid(current_block, previous_block):
+                 print(f"Chain Error: Validation failed for Block {current_block.index} when checking against Block {previous_block.index}.")
                  return False
-            binary_genesis_hash = bin(int(genesis_block.current_hash, 16))[2:].zfill(256)
-            if not binary_genesis_hash.startswith('0' * self.difficulty):
-                print(f"Chain Error: Proof of Work not met for Genesis Block {genesis_block.index}.")
-                return False
-
-
+        
         print("Blockchain is valid.")
         return True
