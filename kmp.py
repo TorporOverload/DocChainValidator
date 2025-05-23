@@ -72,3 +72,4 @@ if __name__ == "__main__":
     for i in results:
         print(f"Pattern found at index {i}")
         
+
