@@ -8,7 +8,7 @@ from text_matcher import separate_sentences
 import getpass
 import os
 
-KEY_PATH = os.join("data", "keys")
+KEY_PATH = os.path.join("data", "keys")
 DP_SEED_CONSTANT = "9ca57ab0545f346b422ebf7fe6be7b9a5e11f214a1e575bfc0db081f4b5fa0ec"
 
 def sign_data(dp_signature, private_key):
@@ -65,19 +65,19 @@ def verify_signature(dp_signature, signature, public_key):
         # print(f"Signature verification failed: {signature}")
         return False
 
-def username_exists(username, Key_path):
+def username_exists(username):
     """
     Check if a key pair with the given username already exists in the key directory.
     Returns True if either private or public key file contains the username.
     """
-    if not os.path.exists(Key_path):
+    if not os.path.exists(KEY_PATH):
         return False
-    for fname in os.listdir(Key_path):
+    for fname in os.listdir(KEY_PATH):
         if username in fname:
             return True
     return False
 
-def generate_key_pair(Key_path=".\\data\\keys"):
+def generate_key_pair():
     """Generate a public/private RSA 2048-bit key pair and encrypt the private key."""
 
     # Get a valid username
@@ -87,7 +87,7 @@ def generate_key_pair(Key_path=".\\data\\keys"):
             print("Username must be alphanumeric. Please try again.")
         elif len(username) < 3 or len(username) > 20:
             print("Username must be between 3 and 20 characters. Please try again.")
-        elif username_exists(username, Key_path):
+        elif username_exists(username, KEY_PATH):
             print("A key pair with this username already exists. Please choose a different username.")
         else:
             break
@@ -119,9 +119,9 @@ def generate_key_pair(Key_path=".\\data\\keys"):
     )
 
     # Prepare output paths
-    os.makedirs(Key_path, exist_ok=True)
-    private_key_path = os.path.join(Key_path, f"{username}_private_key.pem")
-    public_key_path = os.path.join(Key_path, f"{username}_public_key.pem")
+    os.makedirs(KEY_PATH, exist_ok=True)
+    private_key_path = os.path.join(KEY_PATH, f"{username}_private_key.pem")
+    public_key_path = os.path.join(KEY_PATH, f"{username}_public_key.pem")
 
     # Save private key
     with open(private_key_path, "wb") as file:

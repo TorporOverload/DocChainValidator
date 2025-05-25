@@ -31,7 +31,7 @@ def parse_pdf_to_pages_text(file_path):
     return pages_text_content
 
 
-def get_pdf_title(file_path):
+def get_pdf_title(file_path, doc_index):
     """
     Extracts the title from the PDF metadata.
     Falls back to filename if metadata is missing or empty.
@@ -40,19 +40,35 @@ def get_pdf_title(file_path):
         reader = PdfReader(file_path)
         title = reader.metadata.get('/Title', None)
         
+        def get_filename_from_path(path):
+            """
+            Extracts the filename from a given file path.
+            Handles both Unix and Windows style paths.
+            """
+            if '/' in path:
+                return path.split('/')[-1]
+            elif '\\' in path:
+                return path.split('\\')[-1]
+            else:
+                return path
+        
         # Ensure title is a string and not empty/None
         if isinstance(title, str) and title.strip():
+            if title in doc_index:
+                print(f"Title '{title}' already exists in the index, using filename as fallback.")
+                title = get_filename_from_path(file_path)
+                if title in doc_index:
+                    print(f"Filename '{get_filename_from_path(file_path)}' already exists in the block index plesae use a different file name and try again.")
+                    return None
             return title.strip()
         else:
             print("No valid title found in PDF metadata.")
-            
-            # Fallback to filename
-            if '/' in file_path:
-                return file_path.split('/')[-1]
-            elif '\\' in file_path:
-                return file_path.split('\\')[-1]
-            else:
-                return file_path
+            print("Using filename as title.")
+            title = get_filename_from_path(file_path)
+            if title in doc_index:
+                print(f"Filename '{get_filename_from_path(file_path)}' already exists in the block index plesae use a different file name and try again.")
+                return None
+            return title    
 
     except FileNotFoundError:
         print(f"Error: PDF Document not found at {file_path}")
