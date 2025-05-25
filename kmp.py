@@ -25,11 +25,17 @@ def calculate_lps(pattern):
     return lps
 
 def kmp_search(text, pattern):
+    """
+    KMP string searching algorithm.
+    Returns a list of positions where pattern occurs in text.
+    """
     txt_len = len(text)
     pat_len = len(pattern)
     result = []
+    
     if pat_len == 0 or txt_len == 0: 
         return result
+        
     lps = calculate_lps(pattern)
     i = 0  # Index for text
     j = 0  # Index for pattern
@@ -48,28 +54,5 @@ def kmp_search(text, pattern):
                 j = lps[j - 1]
             else:
                 i += 1
+    
     return result
-                
-
-if __name__ == "__main__":
-    # Example usage
-    # text = "ababcabcabababd"
-    # pattern = "ababd"
-    # kmp_search(text, pattern)                
-    text = ""
-    pattern = ""
-
-    text = open("pypdftext.txt", "rb").read()
-    text = text.decode("utf-8", errors="ignore")
-    text = text.replace("\x0c", "")  # Remove form feed characters
-    
-    pattern = open("pypdftext.txt", "rb").read()
-    pattern = pattern.decode("utf-8", errors="ignore")
-    pattern = pattern.replace("\x0c", "")  # Remove form feed characters
-    
-    results = kmp_search(text, pattern)
-
-    for i in results:
-        print(f"Pattern found at index {i}")
-        
-

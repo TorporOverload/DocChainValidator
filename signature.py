@@ -4,9 +4,11 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 from cryptography.exceptions import InvalidKey
+from text_matcher import separate_sentences
 import getpass
 import os
 
+KEY_PATH = os.join("data", "keys")
 DP_SEED_CONSTANT = "9ca57ab0545f346b422ebf7fe6be7b9a5e11f214a1e575bfc0db081f4b5fa0ec"
 
 def sign_data(dp_signature, private_key):
@@ -57,10 +59,10 @@ def verify_signature(dp_signature, signature, public_key):
             ),
             hashes.SHA256()
         )
-        print(f"Signature verified successfully: {signature}")
+        # print(f"Signature verified successfully: {signature}")
         return True
     except InvalidSignature:
-        print(f"Signature verification failed: {signature}")
+        # print(f"Signature verification failed: {signature}")
         return False
 
 def username_exists(username, Key_path):
@@ -182,18 +184,22 @@ def load_private_key(private_key_path):
             raise ValueError("Failed to load private key: Incorrect password.")
     return private_key
 
-def get_keypair_by_username(username, Key_path=".\\data\\keys"):
+def get_keypair_by_username(username):
     """
     Get the public and private keys for a given username.
     """
-    private_key_path = os.path.join(Key_path, f"{username}_private_key.pem")
-    public_key_path = os.path.join(Key_path, f"{username}_public_key.pem")
+    private_key_path = os.path.join(KEY_PATH, f"{username}_private_key.pem")
+    public_key_path = os.path.join(KEY_PATH, f"{username}_public_key.pem")
 
     if not os.path.exists(private_key_path) or not os.path.exists(public_key_path):
         print(f"Key pair for {username} does not exist.")
         return None, None
-
-    private_key = load_private_key(private_key_path)
+    
+    try:
+        private_key = load_private_key(private_key_path)
+    except (ValueError, InvalidKey) as e:
+        print(f"Error loading private key for {username}: {e}")
+        return None, None
     with open(public_key_path, "rb") as file:
         public_key_data = file.read()
     
@@ -206,9 +212,8 @@ def get_keypair_by_username(username, Key_path=".\\data\\keys"):
 def generate_dp_page_signature(page_text, doc_title, page_number):
     """
     Generates a page signature using Dynamic Programming and Hashing.
-    """
-    chunk_size = 20
-    page_chunks = [page_text[i:i+chunk_size] for i in range(0, len(page_text), chunk_size)]
+    """    # Split into sentences for more natural chunking
+    page_chunks = separate_sentences(page_text)
     
     if not page_text: 
         empty_page_material = (doc_title + str(page_number) + DP_SEED_CONSTANT + "EMPTY_PAGE_PLACEHOLDER").encode('utf-8')

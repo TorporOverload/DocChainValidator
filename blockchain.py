@@ -121,6 +121,12 @@ class Blockchain:
                 chain_data = json.load(f)
                 
             self.chain = [Block.from_dict(block_dict) for block_dict in chain_data]
+            print("Blockchain loaded successfully")
+            print(f"Loaded {len(self.chain)} blocks.")
+            print("Building document index...")
+            for block in self.chain:
+                if isinstance(block.data, dict) and 'title' in block.data:
+                    self.add_block_to_index(block)
             return True
         except Exception as e:
             print(f"Error loading blockchain: {e}")
