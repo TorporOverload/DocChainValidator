@@ -1,3 +1,10 @@
 __pycache__/
 data/
 *.pdf
+.venv
+*.log
+test_network.py
+
+tests/
+.pytest_cache/
+.egg-info/
