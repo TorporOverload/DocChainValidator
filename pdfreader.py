@@ -1,4 +1,4 @@
-from pypdf import PdfReader # Updated import for pypdf
+from pypdf import PdfReader
 import re
 from typing import List, Optional, Dict, Any
 
@@ -10,19 +10,24 @@ def parse_pdf_to_pages_text(file_path: str) -> Optional[List[str]]:
     pages_text_content = []
     try:
         reader = PdfReader(file_path)
-        print(f"Number of pages in PDF: {len(reader.pages)}")
+        num_pages = len(reader.pages)
+        print(f"Number of pages in PDF: {num_pages}")
+        print("Extracting text please wait...")
         for i, page in enumerate(reader.pages):
+            # Display progress as a percentage
+            print(f"Extracting text from PDF... {i + 1}/{num_pages} ({(i + 1) / num_pages * 100:.1f}%)", end='\r')
+            
             text = page.extract_text()
 
             if text:
                 text = re.sub(r'\s+', ' ', text).strip()
                 pages_text_content.append(text)
-                
-                print(f"Extracted text from page {i+1}: {text[:100]}...")  
             else:
                 # Handle cases where a page might have no extractable text (e.g., image-only page)
                 pages_text_content.append(f"[Page {i+1} - No text extracted or image-only page]")
-                print(f"Warning: No text extracted from page {i+1} of {file_path}")
+        
+        print("\nText extraction complete.") # Newline and clear rest of the line
+            
     except FileNotFoundError:
         print(f"Error: PDF Document not found at {file_path}")
         return None

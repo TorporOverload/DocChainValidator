@@ -87,7 +87,7 @@ def generate_key_pair() -> None:
             print("Username must be alphanumeric. Please try again.")
         elif len(username) < 3 or len(username) > 20:
             print("Username must be between 3 and 20 characters. Please try again.")
-        elif username_exists(username, KEY_PATH):
+        elif username_exists(username):
             print("A key pair with this username already exists. Please choose a different username.")
         else:
             break

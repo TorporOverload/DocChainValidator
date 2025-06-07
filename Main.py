@@ -24,6 +24,13 @@ setup_logging()
 logger = logging.getLogger(__name__)
 logger.info("Application starting...")
 
+class Colors:
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    RESET = '\033[0m'
+
 class DocValidatorApp:
     """
     Encapsulates the MNU Digital Document Blockchain System application.
@@ -52,7 +59,7 @@ class DocValidatorApp:
             print(f"Network node started on port {self.DEFAULT_PORT}")
         except Exception as e:
             logger.warning(f"Could not start network node: {e}")
-            print(f"Warning: Could not start network node: {e}")
+            print(f"{Colors.YELLOW}Warning: Could not start network node: {e}{Colors.RESET}")
             print("Running in standalone mode. Network features will be unavailable.")
 
     def _clear_terminal(self):
@@ -61,6 +68,7 @@ class DocValidatorApp:
             os.system('cls')
         else:  # For Unix systems
             print('\033[H\033[J')
+            
     def _signal_handler(self, signum, frame):
         """Handles interrupt signals (e.g., Ctrl+C) gracefully."""
         if signum == signal.SIGINT:  # Only handle Ctrl+C, not other signals
@@ -91,11 +99,11 @@ class DocValidatorApp:
             file_path = input("Enter the path to the PDF document: ")
             if not os.path.exists(file_path):
                 logger.warning(f"File not found: {file_path}")
-                print("File not found. Please check the path and try again.")
+                print(f"{Colors.RED}File not found. Please check the path and try again.{Colors.RESET}")
                 continue
             if not file_path.lower().endswith('.pdf'):
                 logger.warning(f"File is not a PDF: {file_path}")
-                print("The file is not a PDF. Please provide a valid PDF document.")
+                print(f"{Colors.RED}The file is not a PDF. Please provide a valid PDF document.{Colors.RESET}")
                 continue
             break
         
@@ -103,7 +111,7 @@ class DocValidatorApp:
         title = get_pdf_title(file_path, self.blockchain.doc_index)
         if title is None:
             logger.error(f"Failed to extract a valid title from PDF: {file_path}")
-            print("Failed to extract a valid title from the PDF. Please check the file and try again.")
+            print(f"{Colors.RED}Failed to extract a valid title from the PDF. Please check the file and try again.{Colors.RESET}")
             input("\nPress Enter to continue...")
             return
         logger.info(f"Signing document with title: {title}")
@@ -114,17 +122,17 @@ class DocValidatorApp:
         private_key, public_key_obj = get_keypair_by_username(username) #
         while (private_key is None or public_key_obj is None) and attempts < 3:
             attempts += 1
-            print(f"Keys not found for '{username}'. Attempt {attempts}/3.")
+            print(f"{Colors.YELLOW}Keys not found for '{username}'. Attempt {attempts}/3.{Colors.RESET}")
             if attempts < 3:
                  username = input("Enter a valid username to load keys: ")
                  private_key, public_key_obj = get_keypair_by_username(username) #
             else:
-                print("Failed to load keys after 3 attempts. Please create a key pair or check the username.")
+                print(f"{Colors.RED}Failed to load keys after 3 attempts. Please create a key pair or check the username.{Colors.RESET}")
                 input("\nPress Enter to continue...")
                 return
 
         if private_key is None or public_key_obj is None:
-            print("Failed to load keys.")
+            print(f"{Colors.RED}Failed to load keys.{Colors.RESET}")
             input("\nPress Enter to continue...")
             return
 
@@ -135,7 +143,6 @@ class DocValidatorApp:
         
         print("\nQueuing blocks for mining...")
         for i, page_content in enumerate(pages):
-            print(f"Processing Page {i+1}...")
             data = {
                 'title': title,
                 'page': i, 
@@ -145,15 +152,12 @@ class DocValidatorApp:
             page_signature_dp = generate_dp_page_signature(page_content, title, i + 1) #
             signature = sign_data(page_signature_dp, private_key) #
             self.mining_worker.add_block_task(data=data, signature=signature)
-            print(f"Page {i+1} queued for mining.")
         
         logger.info(f"Queued {len(pages)} pages for mining for document '{title}'")
-        print("\nWaiting for block mining to complete...")
-        self.mining_worker.wait_for_completion()
-        logger.info(f"All blocks mined and added to blockchain for document '{title}'")
-        print("All blocks have been mined and added to the blockchain.")
-        print(f"Current Blockchain length: {len(self.blockchain.chain)}")
-        input("\nPress Enter to continue...")
+        print(f"\n{Colors.GREEN}All {len(pages)} pages have been queued for mining.{Colors.RESET}")
+        print("The mining process will continue in the background.")
+        print("You can monitor the status on the main menu.")
+        input("\nPress Enter to return to the main menu...")
 
     def _verify_document(self):
         self._clear_terminal()
@@ -164,11 +168,11 @@ class DocValidatorApp:
             file_path = input("Enter the path to the PDF document: ")
             if not os.path.exists(file_path):
                 logger.warning(f"File not found: {file_path}")
-                print("File not found. Please check the path and try again.")
+                print(f"{Colors.RED}File not found. Please check the path and try again.{Colors.RESET}")
                 continue
             if not file_path.lower().endswith('.pdf'):
                 logger.warning(f"File is not a PDF: {file_path}")
-                print("The file is not a PDF. Please provide a valid PDF document.")
+                print(f"{Colors.RED}The file is not a PDF. Please provide a valid PDF document.{Colors.RESET}")
                 continue
             break
         
@@ -184,7 +188,7 @@ class DocValidatorApp:
             print("Found blocks for document title, checking for tampering...")
             doc_blocks, tampered_pages = self._check_for_pages_by_content(pages, title_blocks)
         else:
-            print("\nNo blocks found for document title:", title)
+            print(f"\n{Colors.YELLOW}No blocks found for document title: {title}{Colors.RESET}")
             print("\nWould you like to search for similar content across the entire blockchain?")
             print("This process may take longer as it needs to compare with all blocks.")
             choice = input("Enter 'y' to continue with content search, or any other key to cancel: ")
@@ -193,12 +197,12 @@ class DocValidatorApp:
                 print("\nSearching by content across the entire blockchain. Please wait...")
                 doc_blocks, tampered_pages = self._check_for_pages_by_content(pages, self.blockchain.chain)
             else:
-                print("\n✗ VERIFICATION FAILED - Document not found in blockchain.")
+                print(f"\n{Colors.RED}✗ VERIFICATION FAILED - Document not found in blockchain.{Colors.RESET}")
                 input("\nPress Enter to continue...")
                 return
             
         if not doc_blocks and not tampered_pages:
-            print("\n✗ VERIFICATION FAILED - No matching or similar content found in the blockchain.")
+            print(f"\n{Colors.RED}✗ VERIFICATION FAILED - No matching or similar content found in the blockchain.{Colors.RESET}")
             print("This document appears to be completely different from any registered document.")
             input("\nPress Enter to continue...")
             return
@@ -222,12 +226,12 @@ class DocValidatorApp:
                         backend=default_backend()
                     )
                     if verify_signature(page_signature_dp, block.signature, public_key): #
-                        print(f"✓ Page {i+1} verified successfully.")
-                        print(f"  Block #{block.index}, Timestamp: {block.timestamp}")
+                        print(f"{Colors.GREEN}✓ Page {i+1} verified successfully.{Colors.RESET}")
+                        print(f"  Block #{block.index}, Timestamp: {datetime.fromtimestamp(block.timestamp)}")
                         verified_pages_indices.add(i)
                         page_verified_this_iteration = True
                     else:
-                        print(f"✗ Page {i+1} VERIFICATION FAILED - Signature invalid for exact content match.")
+                        print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - Signature invalid for exact content match.{Colors.RESET}")
                         tampered_pages[i] = {
                             'original': block.data['content'], 'modified': page_content, 'block': block,
                             'similarity': 100.0, 'matches': []
@@ -239,22 +243,22 @@ class DocValidatorApp:
 
             if i in tampered_pages:
                 info = tampered_pages[i]
-                print(f"✗ Page {i+1} VERIFICATION FAILED - Content has been modified.")
-                print(f"  Found similar content in Block #{info['block'].index} with {info['similarity']:.1f}% similarity.")
+                print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - Content has been modified.{Colors.RESET}")
+                print(f"  {Colors.YELLOW}Found similar content in Block #{info['block'].index} with {info['similarity']:.1f}% similarity.{Colors.RESET}")
             elif not any(b.data.get('page') == i for b in doc_blocks):
-                 print(f"✗ Page {i+1} VERIFICATION FAILED - No matching block found in the blockchain.")
+                 print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - No matching block found in the blockchain.{Colors.RESET}")
 
 
         print("\n--- Verification Summary ---")
         print(f"Total Pages in Document: {len(pages)}")
-        print(f"Verified Pages: {len(verified_pages_indices)}")
+        print(f"{Colors.GREEN}Verified Pages: {len(verified_pages_indices)}{Colors.RESET}")
         unverified_count = len(pages) - len(verified_pages_indices)
-        print(f"Unverified/Tampered Pages: {unverified_count}")
+        print(f"{Colors.RED}Unverified/Tampered Pages: {unverified_count}{Colors.RESET}")
         
         if unverified_count == 0:
-            print("\n✓ DOCUMENT IS VALID - All pages verified successfully.")
+            print(f"\n{Colors.GREEN}✓ DOCUMENT IS VALID - All pages verified successfully.{Colors.RESET}")
         else:
-            print("\n✗ DOCUMENT IS INVALID - Some pages failed verification or were tampered with.")
+            print(f"\n{Colors.RED}✗ DOCUMENT IS INVALID - Some pages failed verification or were tampered with.{Colors.RESET}")
             
         print(f"\nVerification completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         input("\nPress Enter to continue...")
@@ -316,7 +320,7 @@ class DocValidatorApp:
                         'similarity': best_similarity_for_page,
                         'matches': candidate_matches_info
                     }
-                    print(f"⚠ Page {page_idx + 1} appears to be modified. Best match with Block #{candidate_tampered_block.index} ({best_similarity_for_page:.1f}% similar).")
+                    print(f"{Colors.YELLOW}⚠ Page {page_idx + 1} appears to be modified. Best match with Block #{candidate_tampered_block.index} ({best_similarity_for_page:.1f}% similar).{Colors.RESET}")
         
         return matching_blocks_for_doc, tampered_info
 
@@ -329,11 +333,19 @@ class DocValidatorApp:
         try:
             generate_key_pair()
             logger.info("Key pair generation completed.")
-            print("\nKey pair generation process completed/initiated (check console output from function).")
+            print(f"\n{Colors.GREEN}Key pair generation successful.{Colors.RESET}")
+            
+            # Ask user if they want to sign a document now
+            choice = input("Would you like to sign a document with this new key? (y/n): ").lower()
+            if choice == 'y':
+                self._sign_document()
+
         except Exception as e:
             logger.error(f"Error during key pair generation: {e}")
-            print(f"An error occurred during key pair generation: {e}")
-        input("\nPress Enter to continue...")
+            print(f"{Colors.RED}An error occurred during key pair generation: {e}{Colors.RESET}")
+        
+        input("\nPress Enter to return to the main menu...")
+
 
     def _show_network_status(self):
         self._clear_terminal()
@@ -342,7 +354,7 @@ class DocValidatorApp:
         print("--------------")
         if not self.network_node or not hasattr(self.network_node, 'get_network_stats') or not self.network_node.running:
             logger.warning("Network node is not running or not fully initialized.")
-            print("Network node is not running or not fully initialized (standalone mode).")
+            print(f"{Colors.YELLOW}Network node is not running or not fully initialized (standalone mode).{Colors.RESET}")
         else:
             try:
                 stats = self.network_node.get_network_stats()
@@ -353,10 +365,10 @@ class DocValidatorApp:
                 print(f"Local Chain Height: {stats.get('chain_height', 'N/A')}")
                 print(f"Latest Block Hash: {stats.get('latest_block_hash', 'N/A')[:12]}...")
                 if stats.get('pending_retries', 0) > 0:
-                    print(f"Pending reconnection attempts: {stats['pending_retries']}")
+                    print(f"{Colors.YELLOW}Pending reconnection attempts: {stats['pending_retries']}{Colors.RESET}")
             except Exception as e:
                 logger.error(f"Error getting network status: {e}")
-                print(f"Error getting network status: {e}")
+                print(f"{Colors.RED}Error getting network status: {e}{Colors.RESET}")
         input("\nPress Enter to continue...")
 
     def _connect_to_peer(self):
@@ -366,7 +378,7 @@ class DocValidatorApp:
         print("---------------")
         if self.network_node is None or not hasattr(self.network_node, 'running') or not self.network_node.running:
             logger.warning("Network node is not running or not fully initialized.")
-            print("Network node is not running or not fully initialized (standalone mode).")
+            print(f"{Colors.YELLOW}Network node is not running or not fully initialized (standalone mode).{Colors.RESET}")
             input("\nPress Enter to continue...")
             return
         try:
@@ -374,7 +386,7 @@ class DocValidatorApp:
             port_str = input(f"Enter peer port (e.g., {self.DEFAULT_PORT}): ").strip()
             if not port_str:
                 logger.warning("Peer connection attempt with empty port.")
-                print("Port number cannot be empty.")
+                print(f"{Colors.RED}Port number cannot be empty.{Colors.RESET}")
                 input("\nPress Enter to continue..."); return
             try:
                 port = int(port_str)
@@ -382,7 +394,7 @@ class DocValidatorApp:
                     raise ValueError("Port number out of range.")
             except ValueError as ve:
                 logger.warning(f"Invalid port number: {ve}")
-                print(f"Invalid port number: {ve}")
+                print(f"{Colors.RED}Invalid port number: {ve}{Colors.RESET}")
                 input("\nPress Enter to continue..."); return
             logger.info(f"Attempting to connect to peer {host}:{port}")
             print(f"\nAttempting to connect to {host}:{port}...")
@@ -390,7 +402,7 @@ class DocValidatorApp:
             print("Connection request sent. Check node logs for status.")
         except Exception as e:
             logger.error(f"Error initiating connection to peer: {e}")
-            print(f"Error initiating connection to peer: {e}")
+            print(f"{Colors.RED}Error initiating connection to peer: {e}{Colors.RESET}")
         input("\nPress Enter to continue...")
 
     def run(self):
@@ -408,9 +420,9 @@ class DocValidatorApp:
             # Check mining status
             mining_status_indicator = ""
             if self.mining_worker and self.mining_worker.working:
-                mining_status_indicator = " (Mining in progress...)"
+                mining_status_indicator = f" {Colors.YELLOW}(Mining in progress...){Colors.RESET}"
             
-            print(f"\nMNU Digital Document Blockchain System{mining_status_indicator}")
+            print(f"\n{Colors.BLUE}MNU Digital Document Blockchain System{Colors.RESET}{mining_status_indicator}")
             print("---------------------------------------")
             print("1. Sign a new document")
             print("2. Verify a document")
@@ -431,7 +443,7 @@ class DocValidatorApp:
                 break
             else:
                 logger.warning(f"Invalid menu choice: {choice}")
-                print("Invalid choice. Please try again.")
+                print(f"{Colors.RED}Invalid choice. Please try again.{Colors.RESET}")
                 sleep(1)
 
 if __name__ == "__main__":
