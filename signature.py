@@ -2,16 +2,16 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.exceptions import InvalidSignature
-from cryptography.exceptions import InvalidKey
+from cryptography.exceptions import InvalidSignature, InvalidKey
 from text_matcher import separate_sentences
 import getpass
 import os
+from typing import Optional, Tuple, Any
 
 KEY_PATH = os.path.join("data", "keys")
 DP_SEED_CONSTANT = "9ca57ab0545f346b422ebf7fe6be7b9a5e11f214a1e575bfc0db081f4b5fa0ec"
 
-def sign_data(dp_signature, private_key):
+def sign_data(dp_signature: str, private_key: Any) -> str:
     """
     Sign the data using the provided private key.
     
@@ -34,7 +34,7 @@ def sign_data(dp_signature, private_key):
     
     return signature.hex()
 
-def verify_signature(dp_signature, signature, public_key):
+def verify_signature(dp_signature: str, signature: str, public_key: Any) -> bool:
     """
     
     Verify the signature of the data using the provided public key.
@@ -65,7 +65,7 @@ def verify_signature(dp_signature, signature, public_key):
         # print(f"Signature verification failed: {signature}")
         return False
 
-def username_exists(username):
+def username_exists(username: str) -> bool:
     """
     Check if a key pair with the given username already exists in the key directory.
     Returns True if either private or public key file contains the username.
@@ -77,7 +77,7 @@ def username_exists(username):
             return True
     return False
 
-def generate_key_pair():
+def generate_key_pair() -> None:
     """Generate a public/private RSA 2048-bit key pair and encrypt the private key."""
 
     # Get a valid username
@@ -136,7 +136,7 @@ def generate_key_pair():
 
     print(f"Keys saved:\n  Private: {private_key_path}\n  Public : {public_key_path}")
     
-def load_private_key(private_key_path):
+def load_private_key(private_key_path: str) -> Optional[Any]:
     """
     Loads an RSA private key from a PEM file.
     - Handles encrypted and unencrypted keys.
@@ -184,7 +184,7 @@ def load_private_key(private_key_path):
             raise ValueError("Failed to load private key: Incorrect password.")
     return private_key
 
-def get_keypair_by_username(username):
+def get_keypair_by_username(username: str) -> Tuple[Optional[Any], Optional[Any]]:
     """
     Get the public and private keys for a given username.
     """
@@ -209,7 +209,7 @@ def get_keypair_by_username(username):
 
     
     
-def generate_dp_page_signature(page_text, doc_title, page_number):
+def generate_dp_page_signature(page_text: str, doc_title: str, page_number: int) -> str:
     """
     Generates a page signature using Dynamic Programming and Hashing.
     """    # Split into sentences for more natural chunking
@@ -242,21 +242,21 @@ def generate_dp_page_signature(page_text, doc_title, page_number):
     
     
     
-if __name__ == "__main__":
-    # Example usage
-    # generate_key_pair()
+# if __name__ == "__main__":
+#     # Example usage
+#     # generate_key_pair()
 
-    attempts = 0
-    username = input("Enter username to load keys: ")
-    private_key, public_key = get_keypair_by_username(username)
-    while (private_key is None or public_key is None) and attempts < 3:
-        if attempts > 0: # Only ask for username again if it's not the first try
-            username = input("Enter a valid username to load keys: ")
-        private_key, public_key = get_keypair_by_username(username)
-        attempts += 1
-    if private_key is None or public_key is None:
-        print("Failed to load keys after 3 attempts.")
-        exit(1) # ewfrgetfnh
+#     attempts = 0
+#     username = input("Enter username to load keys: ")
+#     private_key, public_key = get_keypair_by_username(username)
+#     while (private_key is None or public_key is None) and attempts < 3:
+#         if attempts > 0: # Only ask for username again if it's not the first try
+#             username = input("Enter a valid username to load keys: ")
+#         private_key, public_key = get_keypair_by_username(username)
+#         attempts += 1
+#     if private_key is None or public_key is None:
+#         print("Failed to load keys after 3 attempts.")
+#         exit(1) # ewfrgetfnh
         
 # reference:       
 # https://dev.to/u2633/the-flow-of-creating-digital-signature-and-verification-in-python-37ng

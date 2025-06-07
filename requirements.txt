@@ -1,2 +1,4 @@
 pypdf
 cryptography==45.0.2
+pytest
+pytest-mock

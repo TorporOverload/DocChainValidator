@@ -1,324 +1,458 @@
+import os
+import signal
 from time import sleep
-from blockchain import Blockchain
-from pdfreader import parse_pdf_to_pages_text, get_pdf_title
-from signature import generate_dp_page_signature, get_keypair_by_username, sign_data, verify_signature, generate_key_pair
+from datetime import datetime
+import logging
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-from text_matcher import find_text_matches, show_diff
-import os
-from datetime import datetime
-import signal
 
+from blockchain import Blockchain
+from network.node import BlockchainNode
+from pdfreader import parse_pdf_to_pages_text, get_pdf_title
+from signature import (
+    generate_dp_page_signature,
+    get_keypair_by_username,
+    sign_data,
+    verify_signature,
+    generate_key_pair
+)
+from text_matcher import find_text_matches
+from mining_worker import BlockMiningWorker # Import from the new file
 
-DIFFICULTY = 3  # Default difficulty for mining blocks
+from logging_config import setup_logging
+setup_logging()
+logger = logging.getLogger(__name__)
+logger.info("Application starting...")
 
-blockchain = Blockchain(DIFFICULTY)
-        
-def main_menu():
-    clear_terminal()
-    print("Loading blockchain...")
-    global blockchain
-    blockchain = Blockchain(DIFFICULTY)
-    
-    while 1:
-        print("\nMNU Digital Document Blockchain System")
-        print("---------------------------------------")
-        print("1. Sign a new document")
-        print("2. Verify a document")
-        print("3. Create new key pair")
-        print("4. Exit")
-        choice = input("Enter your choice: ")
-        if choice == '1':
-            sign_document()
-        elif choice == '2':
-            verify_document()
-        elif choice == '3':
-            generate_key_pair()
-        elif choice == '4':
-            print("Saving blockchain...")
-            blockchain.save_chain()
-            print("Exiting the system..")
-            sleep(1)
-            break
-        else:
-            print("Invalid choice. Please try again.")
-         
-      
-def sign_document():
-    global blockchain
-    clear_terminal()
-    print("Sign a New Document")
-    print("---------------------")
-    while True:
-        file_path = input("Enter the path to the PDF document: ")
-        if not os.path.exists(file_path):
-            print("File not found. Please check the path and try again.")
-            continue
-        if not file_path.lower().endswith('.pdf'):
-            print("The file is not a PDF. Please provide a valid PDF document.")
-            continue
-        else:
-            break
-            
-    # Extract text from the PDF
-    pages = parse_pdf_to_pages_text(file_path)
-    title = get_pdf_title(file_path, blockchain.doc_index)
-    if title is None:
-        print("Failed to extract a valid title from the PDF. Please check the file and try again.")
-        return
-    print(f"Title of the Document: {title}")
-    
-    attempts = 0
-    username = input("Enter username to load keys: ")
-    private_key, public_key = get_keypair_by_username(username)
-    while (private_key is None or public_key is None) and attempts < 3:
-        if attempts > 0:
-            username = input("Enter a valid username to load keys: ")
-        private_key, public_key = get_keypair_by_username(username)
-        attempts += 1
-    if private_key is None or public_key is None:
-        print("Failed to load keys after 3 attempts.")
-        return
-
-    public_key = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo).decode('utf-8')
-    
-    print("\nAdding new blocks...")
-    for i, page in enumerate(pages):
-        print(f"Adding block for Page {i+1}...")
-        data = {
-            'title' : title,
-            'page': i,
-            'content' : page,
-            'public_key' : public_key
-        }
-        page_signature_dp = generate_dp_page_signature(page, title, i+1)
-        signature = sign_data(page_signature_dp, private_key)
-        blockchain.add_block(data=data, signature=signature)
-        print(f"Block {i+1} added with signature: {signature}")
-            
-    print("\nCurrent Blockchain length:", len(blockchain.chain))
-    
-def verify_document():
-    global blockchain
-    clear_terminal()
-    print("Verify a Document")
-    print("-------------------")
-    while True:
-        file_path = input("Enter the path to the PDF document: ")
-        if not os.path.exists(file_path):
-            print("File not found. Please check the path and try again.")
-            continue
-        if not file_path.lower().endswith('.pdf'):
-            print("The file is not a PDF. Please provide a valid PDF document.")
-            continue
-        else:
-            break
-            
-    # Extract text from the PDF
-    pages = parse_pdf_to_pages_text(file_path)
-    title = get_pdf_title(file_path, blockchain.doc_index)
-    print(f"Title of the Document: {title}")
-    
-    # Initialize containers
-    doc_blocks = []
-    tampered_pages = {}  # Dictionary to store pages with modifications    
-    title_blocks = blockchain.get_blocks_by_title(title) # First try to find blocks by title
-    if title_blocks:
-        print("Found blocks for document title, checking for tampering...")
-        doc_blocks, tampered_pages = check_for_pages_by_content(pages, title_blocks)
-    else:
-        print("No blocks found for this document name in the blockchain. Searching by content...")
-        # Search through all blocks in the blockchain
-        doc_blocks, tampered_pages = check_for_pages_by_content(pages, blockchain.chain)
-        
-    if not doc_blocks and not tampered_pages:
-        print("No matching blocks found in the blockchain.")
-        return
-
-    print("\nVerifying blocks...")
-    verified_pages = set()
-    
-    # Verify each page from the document
-    for i, page in enumerate(pages):
-        print(f"\nVerifying Page {i+1}...")
-        page_verified = False
-        found_similar = False
-        
-        # Try to find and verify matching block
-        for block in doc_blocks:
-            # Only verify if content matches exactly
-            if block.data['content'].strip() == page.strip():
-                # Reconstruct the signature for verification
-                page_signature_dp = generate_dp_page_signature(
-                    block.data['content'],
-                    block.data['title'],
-                    block.data['page']+1
-                )
-                
-                # Load the public key from the block
-                public_key = serialization.load_pem_public_key(
-                    block.data['public_key'].encode('utf-8'),
-                    backend=default_backend()
-                )
-                
-                # Verify the signature
-                if verify_signature(page_signature_dp, block.signature, public_key):
-                    print(f"✓ Page {i+1} verified successfully")
-                    print(f"  Block #{block.index}")
-                    print(f"  Timestamp: {block.timestamp}")
-                    verified_pages.add(i)
-                    page_verified = True
-                    found_similar = True
-                    break
-                else:
-                    print(f"✗ Page {i+1} verification failed - Signature invalid")
-                    tampered_pages[i] = {
-                        'original': block.data['content'],
-                        'modified': page,
-                        'block': block,
-                        'similarity': 100.0,  # Content matches but signature doesn't
-                        'matches': []
-                    }
-                    found_similar = True
-                    break
-        
-        # If not verified, search for similar content
-        if not found_similar:
-            best_block = None
-            best_similarity = 0.0
-            best_matches = []
-            
-            # Search through available blocks
-            search_blocks = title_blocks if title_blocks else blockchain.chain
-            for block in search_blocks:
-                if 'content' not in block.data:
-                    continue
-                    
-                block_content = block.data['content'].strip()
-                page_content = page.strip()
-                match_type, similarity, matches = find_text_matches(block_content, page_content)
-                
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_block = block
-                    best_matches = matches
-            
-            if best_block is not None and best_similarity >= 30:  # Only show similar content if above threshold
-                tampered_pages[i] = {
-                    'original': best_block.data['content'],
-                    'modified': page,
-                    'block': best_block,
-                    'similarity': best_similarity,
-                    'matches': best_matches
-                }
-                print(f"✗ Page {i+1} verification failed - Content has been modified")
-                print(f"  Found similar content with {best_similarity:.1f}% similarity")
-            else:
-                print(f"✗ Page {i+1} verification failed - No matching content found")
-    
-    # Summary
-    print("\nVerification Summary:")
-    print(f"Total Pages: {len(pages)}")
-    print(f"Verified Pages: {len(verified_pages)}")
-    
-    if len(verified_pages) == len(pages):
-        print("\n✓ Document is VALID - All pages verified successfully")
-        print(f"Verified at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    else:
-        print("\n✗ Document is INVALID - Some pages failed verification")
-        unverified_pages = set(range(len(pages))) - verified_pages
-        
-        # Show diff for all unverified pages
-        if unverified_pages:
-            print("\nUnverified Pages Details:")
-            for page_num in unverified_pages:
-                print(f"\nPage {page_num + 1}:")
-                if page_num in tampered_pages:
-                    print(f"WARNING: Content modifications detected almost - {tampered_pages[page_num]['similarity']:.1f}% similarity to original")
-                    print("Signature invalid")
-                    # Show detailed diff for each tampered page
-                    show_diff(
-                        tampered_pages[page_num]['original'],
-                        tampered_pages[page_num]['modified']
-                    )
-                    print(f"\nTimestamp of original block: {tampered_pages[page_num]['block'].timestamp}")
-                else:
-                    print("No matching content found in blockchain")
-
-def check_for_pages_by_content(pages, blocks_to_check, tampered_pages=None):
+class DocValidatorApp:
     """
-    Check pages for content against a list of blocks.
-    
-    Args:
-        pages: List of page contents to check
-        blocks_to_check: List of blockchain blocks to compare against
-        tampered_pages: Optional dictionary to store information about tampered pages
-        
-    Returns:
-        tuple: (matching_blocks, tampered_pages) where:
-            - matching_blocks: List of blocks that exactly match any pages
-            - tampered_pages: Dictionary mapping page numbers to tampering information
+    Encapsulates the MNU Digital Document Blockchain System application.
     """
-    matching_blocks = []
-    if tampered_pages is None:
-        tampered_pages = {}
-    
-    for block in blocks_to_check:
-        if 'content' not in block.data:
-            continue
-            
-        # For each page in the document
-        for i, page in enumerate(pages):
-            # Skip if we already found an exact match or tampering for this page
-            if i in tampered_pages or any(b.data['page'] == i for b in matching_blocks):
+    DIFFICULTY = 3
+    DEFAULT_PORT = 5000
+
+    def __init__(self):
+        self._clear_terminal()
+        logger.info("Loading blockchain and initializing components...")
+        self.blockchain = Blockchain(self.DIFFICULTY)
+        self.mining_worker = BlockMiningWorker(self.blockchain)
+        self.network_node = None
+        self._initialize_network_node()
+        
+        signal.signal(signal.SIGINT, self._signal_handler)
+        logger.info("DocValidatorApp initialized.")
+
+    def _initialize_network_node(self):
+        """Initializes and starts the network node."""
+        try:
+            self.network_node = BlockchainNode("localhost", self.DEFAULT_PORT, self.blockchain)
+            self.network_node.start()
+            logger.info(f"Network node started on port {self.DEFAULT_PORT}")
+            print(f"Network running stat: {self.network_node.running}")
+            print(f"Network node started on port {self.DEFAULT_PORT}")
+        except Exception as e:
+            logger.warning(f"Could not start network node: {e}")
+            print(f"Warning: Could not start network node: {e}")
+            print("Running in standalone mode. Network features will be unavailable.")
+
+    def _clear_terminal(self):
+        """Clears the terminal screen without triggering signal handlers."""
+        if os.name == 'nt':  # For Windows
+            os.system('cls')
+        else:  # For Unix systems
+            print('\033[H\033[J')
+    def _signal_handler(self, signum, frame):
+        """Handles interrupt signals (e.g., Ctrl+C) gracefully."""
+        if signum == signal.SIGINT:  # Only handle Ctrl+C, not other signals
+            logger.info("Interrupt signal received. Shutting down application.")
+            print("\n\nInterrupt signal received.")
+            self._shutdown()
+            exit(0)
+
+    def _shutdown(self):
+        logger.info("Shutting down application. Saving blockchain and stopping network node if running.")
+        print("Saving blockchain...")
+        self.blockchain.save_chain()
+        print("Blockchain saved.")
+        if self.network_node and hasattr(self.network_node, 'stop'):
+            print("Stopping network node...")
+            self.network_node.stop()
+            logger.info("Network node stopped.")
+            print("Network node stopped.")
+        print("Exiting the system...")
+        sleep(1)
+
+    def _sign_document(self):
+        self._clear_terminal()
+        logger.info("User started document signing process.")
+        print("Sign a New Document")
+        print("---------------------")
+        while True:
+            file_path = input("Enter the path to the PDF document: ")
+            if not os.path.exists(file_path):
+                logger.warning(f"File not found: {file_path}")
+                print("File not found. Please check the path and try again.")
                 continue
+            if not file_path.lower().endswith('.pdf'):
+                logger.warning(f"File is not a PDF: {file_path}")
+                print("The file is not a PDF. Please provide a valid PDF document.")
+                continue
+            break
+        
+        pages = parse_pdf_to_pages_text(file_path)
+        title = get_pdf_title(file_path, self.blockchain.doc_index)
+        if title is None:
+            logger.error(f"Failed to extract a valid title from PDF: {file_path}")
+            print("Failed to extract a valid title from the PDF. Please check the file and try again.")
+            input("\nPress Enter to continue...")
+            return
+        logger.info(f"Signing document with title: {title}")
+        print(f"Title of the Document: {title}")
+        
+        attempts = 0
+        username = input("Enter username to load keys: ")
+        private_key, public_key_obj = get_keypair_by_username(username) #
+        while (private_key is None or public_key_obj is None) and attempts < 3:
+            attempts += 1
+            print(f"Keys not found for '{username}'. Attempt {attempts}/3.")
+            if attempts < 3:
+                 username = input("Enter a valid username to load keys: ")
+                 private_key, public_key_obj = get_keypair_by_username(username) #
+            else:
+                print("Failed to load keys after 3 attempts. Please create a key pair or check the username.")
+                input("\nPress Enter to continue...")
+                return
+
+        if private_key is None or public_key_obj is None:
+            print("Failed to load keys.")
+            input("\nPress Enter to continue...")
+            return
+
+        public_key_pem = public_key_obj.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('utf-8')
+        
+        print("\nQueuing blocks for mining...")
+        for i, page_content in enumerate(pages):
+            print(f"Processing Page {i+1}...")
+            data = {
+                'title': title,
+                'page': i, 
+                'content': page_content,
+                'public_key': public_key_pem
+            }
+            page_signature_dp = generate_dp_page_signature(page_content, title, i + 1) #
+            signature = sign_data(page_signature_dp, private_key) #
+            self.mining_worker.add_block_task(data=data, signature=signature)
+            print(f"Page {i+1} queued for mining.")
+        
+        logger.info(f"Queued {len(pages)} pages for mining for document '{title}'")
+        print("\nWaiting for block mining to complete...")
+        self.mining_worker.wait_for_completion()
+        logger.info(f"All blocks mined and added to blockchain for document '{title}'")
+        print("All blocks have been mined and added to the blockchain.")
+        print(f"Current Blockchain length: {len(self.blockchain.chain)}")
+        input("\nPress Enter to continue...")
+
+    def _verify_document(self):
+        self._clear_terminal()
+        logger.info("User started document verification process.")
+        print("Verify a Document")
+        print("-------------------")
+        while True:
+            file_path = input("Enter the path to the PDF document: ")
+            if not os.path.exists(file_path):
+                logger.warning(f"File not found: {file_path}")
+                print("File not found. Please check the path and try again.")
+                continue
+            if not file_path.lower().endswith('.pdf'):
+                logger.warning(f"File is not a PDF: {file_path}")
+                print("The file is not a PDF. Please provide a valid PDF document.")
+                continue
+            break
+        
+        pages = parse_pdf_to_pages_text(file_path)
+        title = get_pdf_title(file_path, self.blockchain.doc_index, validation=True)
+        logger.info(f"Verifying document with title: {title}")
+        print(f"Title of the Document: {title}")
+        
+        doc_blocks = []
+        tampered_pages = {}
+        title_blocks = self.blockchain.get_blocks_by_title(title) #
+        if title_blocks:
+            print("Found blocks for document title, checking for tampering...")
+            doc_blocks, tampered_pages = self._check_for_pages_by_content(pages, title_blocks)
+        else:
+            print("\nNo blocks found for document title:", title)
+            print("\nWould you like to search for similar content across the entire blockchain?")
+            print("This process may take longer as it needs to compare with all blocks.")
+            choice = input("Enter 'y' to continue with content search, or any other key to cancel: ")
             
-            block_content = block.data['content'].strip()
-            page_content = page.strip()
+            if choice.lower() == 'y':
+                print("\nSearching by content across the entire blockchain. Please wait...")
+                doc_blocks, tampered_pages = self._check_for_pages_by_content(pages, self.blockchain.chain)
+            else:
+                print("\n✗ VERIFICATION FAILED - Document not found in blockchain.")
+                input("\nPress Enter to continue...")
+                return
             
-            # Compare documents
-            match_type, similarity, matches = find_text_matches(block_content, page_content)
+        if not doc_blocks and not tampered_pages:
+            print("\n✗ VERIFICATION FAILED - No matching or similar content found in the blockchain.")
+            print("This document appears to be completely different from any registered document.")
+            input("\nPress Enter to continue...")
+            return
+
+        print("\nVerifying blocks...")
+        verified_pages_indices = set()
+        
+        for i, page_content in enumerate(pages):
+            print(f"\nVerifying Page {i+1}...")
+            page_verified_this_iteration = False
             
-            if match_type == 'exact':
-                matching_blocks.append(block)
-                print(f"Found exact match for page {i+1}")
-                break
-            elif match_type == 'modified':
-                tampered_pages[i] = {
-                    'original': block_content,
-                    'modified': page_content,
-                    'block': block,
-                    'similarity': similarity,
-                    'matches': matches
-                }
-                print(f"⚠ Page {i+1} appears to be modified almost - {similarity:.1f}% similar to original")
-                print("  Signature will be invalid")
+            for block in doc_blocks:
+                if block.data.get('page') == i and block.data.get('content','').strip() == page_content.strip():
+                    page_signature_dp = generate_dp_page_signature( #
+                        block.data['content'],
+                        block.data['title'],
+                        block.data['page'] + 1 
+                    )
+                    public_key = serialization.load_pem_public_key(
+                        block.data['public_key'].encode('utf-8'),
+                        backend=default_backend()
+                    )
+                    if verify_signature(page_signature_dp, block.signature, public_key): #
+                        print(f"✓ Page {i+1} verified successfully.")
+                        print(f"  Block #{block.index}, Timestamp: {block.timestamp}")
+                        verified_pages_indices.add(i)
+                        page_verified_this_iteration = True
+                    else:
+                        print(f"✗ Page {i+1} VERIFICATION FAILED - Signature invalid for exact content match.")
+                        tampered_pages[i] = {
+                            'original': block.data['content'], 'modified': page_content, 'block': block,
+                            'similarity': 100.0, 'matches': []
+                        }
+                    break 
+            
+            if page_verified_this_iteration:
+                continue
+
+            if i in tampered_pages:
+                info = tampered_pages[i]
+                print(f"✗ Page {i+1} VERIFICATION FAILED - Content has been modified.")
+                print(f"  Found similar content in Block #{info['block'].index} with {info['similarity']:.1f}% similarity.")
+            elif not any(b.data.get('page') == i for b in doc_blocks):
+                 print(f"✗ Page {i+1} VERIFICATION FAILED - No matching block found in the blockchain.")
+
+
+        print("\n--- Verification Summary ---")
+        print(f"Total Pages in Document: {len(pages)}")
+        print(f"Verified Pages: {len(verified_pages_indices)}")
+        unverified_count = len(pages) - len(verified_pages_indices)
+        print(f"Unverified/Tampered Pages: {unverified_count}")
+        
+        if unverified_count == 0:
+            print("\n✓ DOCUMENT IS VALID - All pages verified successfully.")
+        else:
+            print("\n✗ DOCUMENT IS INVALID - Some pages failed verification or were tampered with.")
+            
+        print(f"\nVerification completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        input("\nPress Enter to continue...")
+
+    def _check_for_pages_by_content(self, pages, blocks_to_check):
+        logger.info(f"Checking for pages by content. Pages: {len(pages)}, Blocks to check: {len(blocks_to_check)}")
+
+        matching_blocks_for_doc = [] 
+        tampered_info = {} 
+        available_blocks = list(blocks_to_check)
+
+        for page_idx, page_content_current_doc in enumerate(pages):
+            found_exact_match_for_page = False
+            best_similarity_for_page = -1.0
+            candidate_tampered_block = None
+            
+            # Prioritize exact match for the current page index
+            for block_idx, block in enumerate(available_blocks):
+                if 'content' not in block.data or block.data.get('page') != page_idx:
+                    continue
+
+                block_content_stored = block.data['content'].strip()
+                page_content_current_doc_stripped = page_content_current_doc.strip()
                 
-    return matching_blocks, tampered_pages
+                match_type, similarity, _ = find_text_matches(block_content_stored, page_content_current_doc_stripped) #
+                
+                if match_type == 'exact':
+                    matching_blocks_for_doc.append(block)
+                    found_exact_match_for_page = True
+                    print(f"Found exact match for page {page_idx + 1} (Block #{block.index})")
+                    break 
+            
+            if found_exact_match_for_page:
+                continue 
 
-def clear_terminal():
-    os.system('cls' if os.name == 'nt' else 'clear')
-    
-def signal_handler(signum, frame):
-    """Handle Ctrl+C gracefully"""
-    print("\n\nReceived interrupt signal. Saving blockchain...")
-    blockchain.save_chain()
-    print("Blockchain saved. Exiting...")
-    exit(0)
+            # If no exact match for this page_idx, look for modified content from any remaining block
+            for block in available_blocks: # Check all blocks again if not found for specific page_idx
+                if 'content' not in block.data: # or block in matching_blocks_for_doc: # Already used as exact
+                    continue
 
-# Register the signal handler
-signal.signal(signal.SIGINT, signal_handler)
-    
+                block_content_stored = block.data['content'].strip()
+                page_content_current_doc_stripped = page_content_current_doc.strip()
+                match_type, similarity, matches = find_text_matches(block_content_stored, page_content_current_doc_stripped) #
+
+                if similarity > best_similarity_for_page and similarity >= 30: 
+                    best_similarity_for_page = similarity
+                    candidate_tampered_block = block
+                    candidate_matches_info = matches # Store matches for potential display
+            
+            if candidate_tampered_block:
+                 # Check if this block was already assigned as an exact match to another page
+                 is_candidate_block_used_exact = any(b.index == candidate_tampered_block.index for b in matching_blocks_for_doc)
+
+                 if not is_candidate_block_used_exact:
+                    tampered_info[page_idx] = {
+                        'original': candidate_tampered_block.data['content'],
+                        'modified': page_content_current_doc,
+                        'block': candidate_tampered_block,
+                        'similarity': best_similarity_for_page,
+                        'matches': candidate_matches_info
+                    }
+                    print(f"⚠ Page {page_idx + 1} appears to be modified. Best match with Block #{candidate_tampered_block.index} ({best_similarity_for_page:.1f}% similar).")
+        
+        return matching_blocks_for_doc, tampered_info
+
+
+    def _create_new_key_pair(self):
+        self._clear_terminal()
+        logger.info("User started key pair creation process.")
+        print("Create New Key Pair")
+        print("-------------------")
+        try:
+            generate_key_pair()
+            logger.info("Key pair generation completed.")
+            print("\nKey pair generation process completed/initiated (check console output from function).")
+        except Exception as e:
+            logger.error(f"Error during key pair generation: {e}")
+            print(f"An error occurred during key pair generation: {e}")
+        input("\nPress Enter to continue...")
+
+    def _show_network_status(self):
+        self._clear_terminal()
+        logger.info("User requested network status.")
+        print("Network Status")
+        print("--------------")
+        if not self.network_node or not hasattr(self.network_node, 'get_network_stats') or not self.network_node.running:
+            logger.warning("Network node is not running or not fully initialized.")
+            print("Network node is not running or not fully initialized (standalone mode).")
+        else:
+            try:
+                stats = self.network_node.get_network_stats()
+                logger.info(f"Network status: {stats}")
+                print(f"Node ID: {self.network_node.peer_id[:12]}...")
+                print(f"Listening on: {self.network_node.host}:{self.network_node.port}")
+                print(f"Connected Peers: {stats.get('peer_count', 'N/A')}")
+                print(f"Local Chain Height: {stats.get('chain_height', 'N/A')}")
+                print(f"Latest Block Hash: {stats.get('latest_block_hash', 'N/A')[:12]}...")
+                if stats.get('pending_retries', 0) > 0:
+                    print(f"Pending reconnection attempts: {stats['pending_retries']}")
+            except Exception as e:
+                logger.error(f"Error getting network status: {e}")
+                print(f"Error getting network status: {e}")
+        input("\nPress Enter to continue...")
+
+    def _connect_to_peer(self):
+        self._clear_terminal()
+        logger.info("User started peer connection process.")
+        print("Connect to Peer")
+        print("---------------")
+        if self.network_node is None or not hasattr(self.network_node, 'running') or not self.network_node.running:
+            logger.warning("Network node is not running or not fully initialized.")
+            print("Network node is not running or not fully initialized (standalone mode).")
+            input("\nPress Enter to continue...")
+            return
+        try:
+            host = input("Enter peer host (default: localhost): ").strip() or "localhost"
+            port_str = input(f"Enter peer port (e.g., {self.DEFAULT_PORT}): ").strip()
+            if not port_str:
+                logger.warning("Peer connection attempt with empty port.")
+                print("Port number cannot be empty.")
+                input("\nPress Enter to continue..."); return
+            try:
+                port = int(port_str)
+                if not (0 < port < 65536):
+                    raise ValueError("Port number out of range.")
+            except ValueError as ve:
+                logger.warning(f"Invalid port number: {ve}")
+                print(f"Invalid port number: {ve}")
+                input("\nPress Enter to continue..."); return
+            logger.info(f"Attempting to connect to peer {host}:{port}")
+            print(f"\nAttempting to connect to {host}:{port}...")
+            self.network_node.connect_to_peer(host, port)
+            print("Connection request sent. Check node logs for status.")
+        except Exception as e:
+            logger.error(f"Error initiating connection to peer: {e}")
+            print(f"Error initiating connection to peer: {e}")
+        input("\nPress Enter to continue...")
+
+    def run(self):
+        """Main application loop."""
+        menu_actions = {
+            '1': self._sign_document,
+            '2': self._verify_document,
+            '3': self._create_new_key_pair,
+            '4': self._show_network_status,
+            '5': self._connect_to_peer,
+        }
+
+        while True:
+            self._clear_terminal()
+            # Check mining status
+            mining_status_indicator = ""
+            if self.mining_worker and self.mining_worker.working:
+                mining_status_indicator = " (Mining in progress...)"
+            
+            print(f"\nMNU Digital Document Blockchain System{mining_status_indicator}")
+            print("---------------------------------------")
+            print("1. Sign a new document")
+            print("2. Verify a document")
+            print("3. Create new key pair")
+            print("4. Network Status")
+            print("5. Connect to peer")
+            print("6. Exit")
+            print("---------------------------------------")
+            choice = input("Enter your choice: ")
+
+            if choice in menu_actions:
+                logger.info(f"User selected menu option: {choice}")
+                action = menu_actions[choice]
+                action()
+            elif choice == '6':
+                logger.info("User selected exit. Shutting down application.")
+                self._shutdown()
+                break
+            else:
+                logger.warning(f"Invalid menu choice: {choice}")
+                print("Invalid choice. Please try again.")
+                sleep(1)
+
 if __name__ == "__main__":
-    # Register the signal handler for Ctrl+C
-    signal.signal(signal.SIGINT, signal_handler)
-    
+    app = None
     try:
-        main_menu()
+        app = DocValidatorApp()
+        app.run()
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt detected during app initialization or run.")
+        if app:
+            app._shutdown()
+        else:
+            print("Application not fully initialized. Exiting.")
     except Exception as e:
-        print(f"\nUnexpected error: {e}")
-        print("Saving blockchain before exit...")
-        blockchain.save_chain()
-        print("Blockchain saved. Exiting...")
+        print(f"\nAn unexpected error occurred in the application: {e}")
+        import traceback
+        traceback.print_exc() 
+        if app and hasattr(app, 'blockchain') and app.blockchain:
+            print("Attempting to save blockchain before critical exit...")
+            app.blockchain.save_chain() #
+            print("Blockchain saved.")
+        else:
+            print("Could not save blockchain, app or blockchain not available.")
+        print("Exiting due to critical error.")

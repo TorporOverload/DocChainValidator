@@ -1,7 +1,8 @@
 from pypdf import PdfReader # Updated import for pypdf
 import re
+from typing import List, Optional, Dict, Any
 
-def parse_pdf_to_pages_text(file_path):
+def parse_pdf_to_pages_text(file_path: str) -> Optional[List[str]]:
     """
     parses a PDF file and extracts text from each page.
     returns a list of strings, where each string is the text of a page.
@@ -31,44 +32,25 @@ def parse_pdf_to_pages_text(file_path):
     return pages_text_content
 
 
-def get_pdf_title(file_path, doc_index):
+def get_pdf_title(file_path: str, doc_index: Dict[str, Any], validation: bool = False) -> Optional[str]:
     """
-    Extracts the title from the PDF metadata.
-    Falls back to filename if metadata is missing or empty.
+    Gets the title from the PDF file name.
     """
     try:
-        reader = PdfReader(file_path)
-        title = reader.metadata.get('/Title', None)
-        
-        def get_filename_from_path(path):
-            """
-            Extracts the filename from a given file path.
-            Handles both Unix and Windows style paths.
-            """
-            if '/' in path:
-                return path.split('/')[-1]
-            elif '\\' in path:
-                return path.split('\\')[-1]
-            else:
-                return path
-        
-        # Ensure title is a string and not empty/None
-        if isinstance(title, str) and title.strip():
-            if title in doc_index:
-                print(f"Title '{title}' already exists in the index, using filename as fallback.")
-                title = get_filename_from_path(file_path)
-                if title in doc_index:
-                    print(f"Filename '{get_filename_from_path(file_path)}' already exists in the block index plesae use a different file name and try again.")
-                    return None
-            return title.strip()
+        # Extract filename from path
+        if '/' in file_path:
+            title = file_path.split('/')[-1]
+        elif '\\' in file_path:
+            title = file_path.split('\\')[-1]
         else:
-            print("No valid title found in PDF metadata.")
-            print("Using filename as title.")
-            title = get_filename_from_path(file_path)
-            if title in doc_index:
-                print(f"Filename '{get_filename_from_path(file_path)}' already exists in the block index plesae use a different file name and try again.")
-                return None
-            return title    
+            title = file_path
+
+        # Check if title exists in doc_index
+        if not validation and title in doc_index:
+            print(f"Filename '{title}' already exists in the document index. Please use a different file name and try again.")
+            return None
+            
+        return title
 
     except FileNotFoundError:
         print(f"Error: PDF Document not found at {file_path}")
@@ -78,11 +60,11 @@ def get_pdf_title(file_path, doc_index):
         return None
 
     
-if __name__ == "__main__":
-    # Example usage
-    path_to_pdf = "MSA_Vessel_Tracking___CPT245.pdf"
-    pages = parse_pdf_to_pages_text(path_to_pdf)
-    title = get_pdf_title(path_to_pdf)
-    print(f"Title of the PDF: {title}")
-    # for i, page in enumerate(pages):
-    #     print(f"Page {i+1}: {page[:100]}...")  # Print first 100 characters of each page
+# if __name__ == "__main__":
+#     # Example usage
+#     path_to_pdf = "MSA_Vessel_Tracking___CPT245.pdf"
+#     pages = parse_pdf_to_pages_text(path_to_pdf)
+#     title = get_pdf_title(path_to_pdf)
+#     print(f"Title of the PDF: {title}")
+#     # for i, page in enumerate(pages):
+#     #     print(f"Page {i+1}: {page[:100]}...")  # Print first 100 characters of each page
