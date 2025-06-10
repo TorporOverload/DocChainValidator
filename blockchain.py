@@ -1,4 +1,3 @@
-import hashlib # For SHA-256
 import time
 import json
 import os
@@ -9,86 +8,14 @@ from signature import verify_signature, generate_dp_page_signature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
+from block import Block
+
+BlockchainNode = Any 
 
 BLOCKCHAIN_FILE = os.path.join("data", "blockchain", "chain.json")
 
-class Block:
-    def __init__(self, index: int, previous_hash: str, timestamp: int, data: Union[Dict[str, Any], str], signature: str, nonce: int = 0) -> None:
-        self.index: int = index
-        self.previous_hash: str = previous_hash
-        self.timestamp: int = timestamp
-        self.version: int = 1 # Version of the block
-        self.data: Union[Dict[str, Any], str] = data # The data stored in the block (e.g., page content, page number)
-        self.signature: str = signature # Signature of the 'data'
-        self.nonce: int = nonce # The nonce found by Proof of Work
-        self.current_hash: Optional[str] = None # Initialize and set after PoW
-
-    def calculate_hash(self) -> str:
-        """Calculates the hash of the block's content."""
-        # Ensure data (if a dict) is serialized consistently
-        if isinstance(self.data, dict):
-            data_str = json.dumps(self.data, sort_keys=True, separators=(',', ':'))
-        else:
-            data_str = str(self.data)
-
-        block_content = (str(self.index) +
-                         str(self.previous_hash) +
-                         str(self.timestamp) +
-                         str(self.version) +
-                         data_str +
-                         str(self.signature) +
-                         str(self.nonce))
-        
-        first_hash = hashlib.sha256(block_content.encode('utf-8')).digest()
-        double_hash = hashlib.sha256(first_hash).hexdigest()
-        return double_hash
-
-
-    def __str__(self) -> str:
-        """String representation of the block."""
-        if isinstance(self.data, dict):
-            data_str = json.dumps(self.data, indent=4, sort_keys=True)
-        else:
-            data_str = str(self.data)
-            
-        return (f"Block {self.index}:\n"
-                f"  Version: {self.version}\n"
-                f"  Timestamp: {self.timestamp}\n"
-                f"  Previous Hash: {self.previous_hash}\n"
-                f"  Data: {data_str}\n"
-                f"  Signature: {self.signature}\n"
-                f"  Nonce: {self.nonce}\n"
-                f"  Current Hash: {self.current_hash}\n")
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert block to dictionary for JSON serialization"""
-        return {
-            'index': self.index,
-            'previous_hash': self.previous_hash,
-            'timestamp': self.timestamp,
-            'version': self.version,
-            'data': self.data,
-            'signature': self.signature,
-            'nonce': self.nonce,
-            'current_hash': self.current_hash
-        }
-    
-    @classmethod
-    def from_dict(cls, block_dict: Dict[str, Any]) -> 'Block':
-        """Create a Block instance from a dictionary"""
-        block = cls(
-            index=block_dict['index'],
-            previous_hash=block_dict['previous_hash'],
-            timestamp=block_dict['timestamp'],
-            data=block_dict['data'],
-            signature=block_dict['signature'],
-            nonce=block_dict['nonce']
-        )
-        block.version = block_dict['version']
-        block.current_hash = block_dict['current_hash']
-        return block
-
 class Blockchain:
+    """A simple blockchain implementation with Proof of Work and document indexing."""
     def __init__(self, difficulty: int = 3, blockchain_dir: str = BLOCKCHAIN_FILE) -> None:
         self.chain = []
         self.difficulty_string = '0' * difficulty
@@ -104,6 +31,11 @@ class Blockchain:
         if not self.load_chain():
             self.logger.info("No existing blockchain found. Creating new blockchain...")
             self._create_genesis_block()
+
+    def set_node(self, node: BlockchainNode) -> None:
+        """Sets the node for broadcasting blocks"""
+        self.node = node
+        self.logger.info("Node configured for blockchain broadcasting")
 
     def save_chain(self) -> None:
         """Save the blockchain to a JSON file"""
@@ -197,7 +129,7 @@ class Blockchain:
 
     def _create_genesis_block(self) -> None:
         """Creates the first block in the blockchain (Genesis Block)."""
-        genesis_timestamp = int(time.time())
+        genesis_timestamp = 0
         genesis_data = {"message": "Genesis Block"} 
         genesis_signature = "N/A_GENESIS_SIGNATURE"
         
@@ -210,7 +142,8 @@ class Blockchain:
             nonce=0
         )
 
-        mined_nonce = self._proof_of_work(temp_genesis_block)
+        stop_event = threading.Event()
+        mined_nonce = self._proof_of_work(temp_genesis_block, stop_event)
         temp_genesis_block.nonce = mined_nonce
         temp_genesis_block.current_hash = temp_genesis_block.calculate_hash() 
 
@@ -250,7 +183,7 @@ class Blockchain:
                 return None
             return self.chain[-1]
 
-    def add_block(self, data: Dict[str, Any], signature: str) -> Optional[Block]:
+    def add_block(self, data: Dict[str, Any], signature: str, stop_event: threading.Event) -> Optional[Block]:
         """Creates a new block, performs PoW, and adds it to the chain."""
         with self.lock:
             latest_block = self.get_latest_block()
@@ -274,7 +207,14 @@ class Blockchain:
                 nonce=0
             )
 
-            mined_nonce = self._proof_of_work(new_block)
+            # Pass the stop_event to the proof of work function
+            mined_nonce = self._proof_of_work(new_block, stop_event)
+
+            # If mining was interrupted, mined_nonce will be -1
+            if mined_nonce == -1:
+                self.logger.warning(f"Mining for block {new_index} was stopped.")
+                return None
+
             new_block.nonce = mined_nonce
             new_block.current_hash = new_block.calculate_hash()
 
@@ -282,12 +222,19 @@ class Blockchain:
                 self.chain.append(new_block)
                 self.add_block_to_index(new_block)
                 self.logger.info(f"Block #{new_block.index} added to the blockchain.")
-                return new_block
+                if hasattr(self, 'node'):
+                    try:
+                        self.node.broadcast_new_block(new_block)
+                        self.logger.info(f"Block #{new_block.index} broadcast successfully")
+                    except Exception as e:
+                        self.logger.error(f"Failed to broadcast block #{new_block.index}: {str(e)}")
+                else:
+                    self.logger.warning("No node configured - block will not be broadcast")
             else:
                 self.logger.error(f"New block #{new_block.index} was invalid. Not added.")
                 return None
 
-    def _proof_of_work(self, block_to_mine: Block) -> int:
+    def _proof_of_work(self, block_to_mine: Block, stop_event: threading.Event) -> int:
         """
         Simple Proof of Work Algorithm:
         - Find a 'nonce' such that the hex hash of (block's content + nonce)
@@ -301,7 +248,7 @@ class Blockchain:
         self.logger.info("Mining block %d with data: '%s'", block_to_mine.index, data_preview)
         
         nonce_to_try = 0
-        while True:
+        while not stop_event.is_set():
             block_to_mine.nonce = nonce_to_try
             calculated_hash = block_to_mine.calculate_hash()
 
@@ -310,9 +257,14 @@ class Blockchain:
                                block_to_mine.index, nonce_to_try, calculated_hash)
                 return nonce_to_try
             nonce_to_try += 1
-            if nonce_to_try % 100000 == 0:  # Log progress periodically
+            if nonce_to_try % 100000 == 0:
                 self.logger.debug("Mining progress - Tried %d nonces for block %d", 
                                 nonce_to_try, block_to_mine.index)
+        
+        # If the loop was exited, it means we were interrupted.
+        self.logger.info(f"Mining for block {block_to_mine.index} was interrupted.")
+        return -1 # Return -1 to indicate interruption
+
 
     def is_new_block_valid(self, new_block: Block, previous_block: Block) -> bool:
         """Validates a new block before adding it to the chain."""
@@ -432,9 +384,12 @@ class Blockchain:
                 self.logger.error(f"Cannot rewind to invalid index {index}")
                 return False
 
-            self.logger.warning(f"Rewinding blockchain from head {len(self.chain) - 1} back to index {index}")
-            
-            self.chain = self.chain[:index + 1]
+            if index == 0:
+                self.logger.error(f"Fork detected at genesis block.")
+                return False
+            else:
+                self.logger.warning(f"Rewinding blockchain from head {len(self.chain) - 1} back to index {index}")
+                self.chain = self.chain[:index + 1]
 
             # Rebuild the document index
             self.doc_index.clear()

@@ -45,22 +45,24 @@ class DocValidatorApp:
         self.mining_worker = BlockMiningWorker(self.blockchain)
         self.network_node = None
         self._initialize_network_node()
-        
         signal.signal(signal.SIGINT, self._signal_handler)
         logger.info("DocValidatorApp initialized.")
 
     def _initialize_network_node(self):
         """Initializes and starts the network node."""
         try:
-            self.network_node = BlockchainNode("localhost", self.DEFAULT_PORT, self.blockchain)
+            self.network_node = BlockchainNode("localhost", self.DEFAULT_PORT, self.blockchain, self.mining_worker)
             self.network_node.start()
             logger.info(f"Network node started on port {self.DEFAULT_PORT}")
+            self.blockchain.set_node(self.network_node)
             print(f"Network running stat: {self.network_node.running}")
             print(f"Network node started on port {self.DEFAULT_PORT}")
         except Exception as e:
             logger.warning(f"Could not start network node: {e}")
             print(f"{Colors.YELLOW}Warning: Could not start network node: {e}{Colors.RESET}")
             print("Running in standalone mode. Network features will be unavailable.")
+            # TODO add logic to stop start up if network node does not start properly
+            self.network_node = None
 
     def _clear_terminal(self):
         """Clears the terminal screen without triggering signal handlers."""
@@ -96,7 +98,18 @@ class DocValidatorApp:
         print("Sign a New Document")
         print("---------------------")
         while True:
-            file_path = input("Enter the path to the PDF document: ")
+            file_path = input("Enter the path to the PDF document: ").strip()
+            
+            # Handle double-quoted paths from win11 right click copy as path
+            if file_path.startswith('"') and file_path.endswith('"'):
+                file_path = file_path[1:-1]  # Remove surrounding quotes
+            
+            # Normalize path separators
+            file_path = os.path.normpath(file_path)
+
+            if not file_path:
+                print(f"{Colors.RED}Error: No file path provided.{Colors.RESET}")
+                continue
             if not os.path.exists(file_path):
                 logger.warning(f"File not found: {file_path}")
                 print(f"{Colors.RED}File not found. Please check the path and try again.{Colors.RESET}")
@@ -165,7 +178,17 @@ class DocValidatorApp:
         print("Verify a Document")
         print("-------------------")
         while True:
-            file_path = input("Enter the path to the PDF document: ")
+            file_path = input("Enter the path to the PDF document: ").strip()
+            # Handle double-quoted paths
+            if file_path.startswith('"') and file_path.endswith('"'):
+                file_path = file_path[1:-1]  # Remove surrounding quotes
+            
+            # Normalize path separators
+            file_path = os.path.normpath(file_path)
+
+            if not file_path:
+                print(f"{Colors.RED}Error: No file path provided.{Colors.RESET}")
+                continue
             if not os.path.exists(file_path):
                 logger.warning(f"File not found: {file_path}")
                 print(f"{Colors.RED}File not found. Please check the path and try again.{Colors.RESET}")
@@ -359,13 +382,36 @@ class DocValidatorApp:
             try:
                 stats = self.network_node.get_network_stats()
                 logger.info(f"Network status: {stats}")
+                print(f"Node Status: {Colors.GREEN}Running{Colors.RESET}")
                 print(f"Node ID: {self.network_node.peer_id[:12]}...")
                 print(f"Listening on: {self.network_node.host}:{self.network_node.port}")
-                print(f"Connected Peers: {stats.get('peer_count', 'N/A')}")
-                print(f"Local Chain Height: {stats.get('chain_height', 'N/A')}")
-                print(f"Latest Block Hash: {stats.get('latest_block_hash', 'N/A')[:12]}...")
+                
+                # Connection status
+                peer_count = stats.get('peer_count', 0)
+                if peer_count > 0:
+                    print(f"Connected Peers: {Colors.GREEN}{peer_count}{Colors.RESET}")
+                else:
+                    print(f"Connected Peers: {Colors.YELLOW}0 (No active connections){Colors.RESET}")
+                
+                # Blockchain status
+                chain_height = stats.get('chain_height', 0)
+                print(f"Local Chain Height: {chain_height}")
+                latest_hash = stats.get('latest_block_hash', 'N/A')
+                if latest_hash != 'N/A':
+                    print(f"Latest Block Hash: {latest_hash[:12]}...")
+                
+                # Connection health
                 if stats.get('pending_retries', 0) > 0:
-                    print(f"{Colors.YELLOW}Pending reconnection attempts: {stats['pending_retries']}{Colors.RESET}")
+                    print(f"\n{Colors.YELLOW}Connection Health:{Colors.RESET}")
+                    print(f"- Pending reconnection attempts: {stats['pending_retries']}")
+                    print("- Some peers may be temporarily unreachable")
+                else:
+                    print(f"\n{Colors.GREEN}Connection Health: Good{Colors.RESET}")
+                
+                # Known peers info
+                known_peers = stats.get('known_peers', 0)
+                if known_peers > peer_count:
+                    print(f"\nKnown Peers: {known_peers} ({known_peers - peer_count} disconnected)")
             except Exception as e:
                 logger.error(f"Error getting network status: {e}")
                 print(f"{Colors.RED}Error getting network status: {e}{Colors.RESET}")

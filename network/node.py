@@ -4,19 +4,19 @@ import threading
 import socket
 import time
 from typing import Any, Optional
-from blockchain import Block, Blockchain
+from blockchain import Blockchain
+from block import Block
+from mining_worker import BlockMiningWorker
 
 from .config import logger, CHUNK_SIZE, MAX_BLOCKS, SOCKET_TIMEOUT
 from .connection import ConnectionManager
 from .protocol import send_message, receive_message
-from .sync import (
-    handle_blocks, handle_new_block
-)
+from .sync import handle_blocks
+
 
 class BlockchainNode:
     """P2P node implementation for the blockchain network."""
-    
-    def __init__(self, host: str, port: int, blockchain: Blockchain):
+    def __init__(self, host: str, port: int, blockchain: Blockchain, mining_worker: BlockMiningWorker):
         """Initialize a blockchain node.
         
         Args:
@@ -31,12 +31,18 @@ class BlockchainNode:
         self.server_socket: Optional[socket.socket] = None
         self.running = False
         self.protocol_version = 1
-        
+        self.mining_worker = mining_worker
         # Generate peer_id from host:port
         self.peer_id = hashlib.sha256(f"{host}:{port}".encode()).hexdigest()
         
-        # Initialize connection manager
-        self.connection_manager = ConnectionManager(self)
+        try:
+            # Initialize connection manager
+            self.connection_manager = ConnectionManager(self)
+            if not self.connection_manager:
+                raise RuntimeError("Connection manager initialization failed")
+        except Exception as e:
+            logger.error(f"Failed to initialize connection manager: {e}")
+            raise RuntimeError("Connection manager initialization failed") from e
         
     def start(self) -> None:
         """Start the blockchain node server"""
@@ -44,6 +50,7 @@ class BlockchainNode:
         try:
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.server_socket.settimeout(SOCKET_TIMEOUT)  # Add timeout to server socket
             
             # Test if port is available
             test_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -53,34 +60,53 @@ class BlockchainNode:
             
             if result == 0:
                 raise Exception(f"Port {self.port} is already in use")
-                
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(5)
+            
+            logger.info(f"Node binding successful on {self.host}:{self.port}")
+            
+            # Set running flag before starting threads
             self.running = True
+            
+            # Start network threads in order of dependency
+            threading.Thread(target=self._listen_for_connections, daemon=True).start()
+            logger.info("Started connection listener thread")
+            
+            threading.Thread(target=self.connection_manager.ping_peers, daemon=True).start()
+            logger.info("Started peer ping thread")
+            
+            threading.Thread(target=self.connection_manager.retry_connections, daemon=True).start()
+            logger.info("Started connection retry thread")
+            
+            # Initialize peer connections after node is fully set up
+            self.connection_manager.initialize_connections()
+            
+            logger.info(f"Node fully started and initialized on {self.host}:{self.port}")
+            
         except Exception as e:
             logger.error(f"Error starting server: {e}")
             raise
         
-        # Start network threads
-        threading.Thread(target=self._listen_for_connections, daemon=True).start()
-        threading.Thread(target=self.connection_manager.ping_peers, daemon=True).start()
-        threading.Thread(target=self.connection_manager.retry_connections, daemon=True).start()
-        
-        logger.info(f"Node started on {self.host}:{self.port}")
-        
-        # Connect to known peers
-        for peer_id, (host, port) in list(self.connection_manager.peers.items()):
-            if peer_id not in self.connection_manager.connected_sockets:
-                self.connection_manager.connect_to_peer(host, port)
-                
     def stop(self) -> None:
         """Stop the blockchain node server"""
         logger.info("Stopping blockchain node")
-        self.running = False
+        self.running = False  # Signal threads to stop
+        
+        # Close server socket first to stop accepting new connections
         if self.server_socket:
-            self.server_socket.close()
-        self.connection_manager.close_all_connections()
-        self.connection_manager.save_peers()
+            try:
+                self.server_socket.close()
+            except Exception as e:
+                logger.error(f"Error closing server socket: {e}")
+        
+        # Save state and close existing connections
+        try:
+            self.connection_manager.close_all_connections()
+            self.connection_manager.save_peers()
+        except Exception as e:
+            logger.error(f"Error during connection cleanup: {e}")
+        
+        logger.info("Node stopped successfully")
 
     def _listen_for_connections(self) -> None:
         """Listen for incoming peer connections"""
@@ -146,11 +172,15 @@ class BlockchainNode:
 
                     # Handle different message types
                     if msg_type == 'ping':
+                        with self.blockchain.lock:
+                            latest_block = self.blockchain.get_latest_block()
+                            chain_height = len(self.blockchain.chain)
+                            latest_hash = latest_block.current_hash if latest_block else "0"
                         response = {
                             'type': 'PONG',
                             'payload': {
-                                'chain_height': len(self.blockchain.chain),
-                                'latest_hash': self.blockchain.get_latest_block().current_hash
+                                'chain_height': chain_height,
+                                'latest_hash': latest_hash
                             }
                         }
                         send_message(sock, response)
@@ -159,26 +189,30 @@ class BlockchainNode:
                     elif msg_type == 'blocks':
                         handle_blocks(sock, self.blockchain, payload, peer_id)
                     elif msg_type == 'new_block':
-                        handle_new_block(self.blockchain, payload, peer_id, 
+                        self.handle_new_block(payload, peer_id,
                                      self.connection_manager.broadcast_to_peers)
                     elif msg_type == 'pong':
                         logger.debug(f"Received PONG from {peer_id[:8]}")
                         with self.blockchain.lock:
                             our_height = len(self.blockchain.chain)
-                            our_hash = self.blockchain.get_latest_block().current_hash
+                            latest_block = self.blockchain.get_latest_block()
+                            our_hash = latest_block.current_hash if latest_block else "0"
 
                         peer_height = payload.get("chain_height", 0)
                         peer_hash = payload.get("latest_hash", "")
 
-                        # Scenario 1: Peer has a longer chain.
-                        if peer_height > our_height:
-                            logger.info(f"PONG from {peer_id[:8]} shows they have a longer chain. Requesting sync.")
-                            self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
-
-                        # Scenario 2: Same height, but different blocks (a fork).
-                        elif peer_height == our_height and peer_hash != our_hash:
-                            logger.info(f"PONG from {peer_id[:8]} shows a fork at the same height. Requesting sync.")
-                            self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
+                        # Only trigger sync if not already in progress
+                        if not self.connection_manager.sync_in_progress:
+                            # Scenario 1: Peer has a longer chain.
+                            if peer_height > our_height:
+                                logger.info(f"PONG from {peer_id[:8]} shows they have a longer chain. Requesting sync.")
+                                self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
+                            # Scenario 2: Same height, but different blocks (a fork).
+                            elif peer_height == our_height and peer_hash != our_hash:
+                                logger.info(f"PONG from {peer_id[:8]} shows a fork at the same height. Requesting sync.")
+                                self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
+                        else:
+                            logger.info(f"Sync already in progress. Ignoring PONG-triggered sync for peer {peer_id[:8]}")
                     else:
                         if msg_type:
                             logger.warning(f"Unknown message type '{msg_type}' from peer {peer_id}")
@@ -243,3 +277,46 @@ class BlockchainNode:
     def hash_peer_id(host: str, port: int) -> str:
         """Generate a unique peer ID from host and port."""
         return hashlib.sha256(f"{host}:{port}".encode()).hexdigest()[:16]
+    
+    def request_complete_chain(self, peer_id: str) -> None:
+        """Request the complete blockchain from a peer."""
+        if peer_id not in self.connection_manager.connected_sockets:
+            logger.error(f"Cannot request complete chain from {peer_id}: not connected")
+            return
+        
+        sock = self.connection_manager.connected_sockets[peer_id]
+        request = {
+            "type": "GET_BLOCKS",
+            "payload": {"start": 0}
+        }
+        send_message(sock, request)
+        logger.info(f"Requested complete chain from peer {peer_id[:8]}")
+        
+    def handle_new_block(self, payload: dict[str, Any], peer_id: str, broadcast_to_peers: Any) -> None:
+        """Handle a new single block announcement from a peer."""
+        if not isinstance(payload, dict) or 'block' not in payload:
+            logger.error(f"Invalid new block payload from peer {peer_id}")
+            return
+
+        block_dict = payload.get('block')
+       
+        if any(b.current_hash == block_dict.get('current_hash') for b in self.blockchain.chain):
+            return
+
+        try:
+            new_block = Block.from_dict(block_dict)
+            if self.blockchain.is_new_block_valid(new_block, self.blockchain.get_latest_block()):
+                logger.info(f"Valid new block #{new_block.index} received. Interrupting local mining.")
+                try:
+                    if hasattr(self, 'mining_worker') and self.mining_worker:
+                        self.mining_worker.interrupt_current_task()
+                except Exception as e:
+                    logger.error(f"Error interrupting mining worker: {e}")
+                
+                self.blockchain.chain.append(new_block)
+                self.blockchain.add_block_to_index(new_block)
+                self.blockchain.save_chain()
+                logger.info(f"Accepted and added new block #{new_block.index} from peer {peer_id}")
+                broadcast_to_peers({'type': 'NEW_BLOCK', 'payload': {'block': block_dict}}, exclude_peer=peer_id)
+        except Exception as e:
+            logger.error(f"Error processing new block from peer {peer_id}: {str(e)}")

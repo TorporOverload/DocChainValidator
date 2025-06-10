@@ -1,4 +1,4 @@
-from .config import logger, CHUNK_SIZE  # Import CHUNK_SIZE
+from .config import logger, CHUNK_SIZE, MAX_REWIND_DEPTH 
 from .protocol import send_message
 from blockchain import Block, Blockchain
 from typing import Any
@@ -14,13 +14,34 @@ def handle_blocks(sock: Any, blockchain: Blockchain, payload: dict[str, Any], pe
         return
 
     logger.info(f"Received {len(blocks_data)} blocks from {peer_id} for syncing.")
-
     with blockchain.lock:
         latest_block = blockchain.get_latest_block()
         received_block = Block.from_dict(blocks_data[0])
 
-        # Check if the first received block correctly links to our latest block
-        if received_block.previous_hash == latest_block.current_hash:
+        # Special case: If our chain is empty, accept blocks starting from genesis
+        if not latest_block:
+            if received_block.index == 0:  # This is a genesis block
+                logger.info("Chain is empty, accepting genesis block from peer")
+                blockchain.chain = []
+                newly_added_blocks = 0
+                for block_dict in blocks_data:
+                    block_to_add = Block.from_dict(block_dict)
+                    blockchain.chain.append(block_to_add)
+                    blockchain.add_block_to_index(block_to_add)
+                    newly_added_blocks += 1
+                    
+                if newly_added_blocks > 0:
+                    logger.info(f"Successfully added {newly_added_blocks} blocks starting with genesis")
+                    blockchain.save_chain()
+                return
+
+            logger.error("Chain is empty but received non-genesis blocks. Requesting complete chain.")
+            request = {"type": "GET_BLOCKS", "payload": {"start": 0}}
+            send_message(sock, request)
+            return
+
+        # Scenario 1: Blocks are sequential and valid. Append them.
+        if received_block.index == latest_block.index + 1 and received_block.previous_hash == latest_block.current_hash:
             newly_added_blocks = 0
             for block_dict in blocks_data:
                 block_to_add = Block.from_dict(block_dict)
@@ -45,42 +66,49 @@ def handle_blocks(sock: Any, blockchain: Blockchain, payload: dict[str, Any], pe
                 send_message(sock, request)
             else:
                 logger.info("Sync complete. Received a partial batch, now fully synced with peer.")
+                # Notify connection manager that sync is complete
+                if hasattr(blockchain, 'node') and hasattr(blockchain.node, 'connection_manager'):
+                    blockchain.node.connection_manager.sync_complete()
+                elif hasattr(blockchain, 'connection_manager'):
+                    blockchain.connection_manager.sync_complete()
  
-        else:
-            # Fork Detected: Rewind and Retry
-            logger.warning(
-                f"Fork detected! Our block {latest_block.index} hash "
-                f"({latest_block.current_hash[:8]}..) does not match peer's "
-                f"previous hash ({received_block.previous_hash[:8]}..)."
+        elif received_block.index > latest_block.index + 1:
+            # Scenario 2: Gap detected. We are behind the peer.
+            logger.info(
+                f"Gap detected. Our chain height is {latest_block.index}, but peer "
+                f"sent blocks starting from {received_block.index}. Requesting missing blocks."
             )
+            request = {"type": "GET_BLOCKS", "payload": {"start": latest_block.index + 1}}
+            send_message(sock, request)
+
+        else:
+            # Scenario 3: Fork detected. Our chain conflicts with the peer's chain.
+            our_latest_block = blockchain.get_latest_block()
+            logger.warning(
+                f"Fork detected! Our block at index {our_latest_block.index} (hash "
+                f"{our_latest_block.current_hash[:8]}..) conflicts with peer's chain "
+                f"starting at block {received_block.index} (prev_hash {received_block.previous_hash[:8]}..)."
+            )
+
+            # We need to rewind to find a common ancestor.
+            rewind_target_index = our_latest_block.index - 1
             
-            rewind_succeeded = blockchain.rewind_to_index(latest_block.index - 1)
-            
-            if rewind_succeeded:
+            # Safety check to prevent rewinding past the genesis block.
+            if rewind_target_index < 0:
+                logger.error("Cannot rewind past genesis block. Requesting full chain sync.")
+                request = {"type": "GET_BLOCKS", "payload": {"start": 0}}
+                send_message(sock, request)
+                return
+
+            logger.info(f"Attempting to resolve fork by rewinding to index {rewind_target_index}.")
+            if blockchain.rewind_to_index(rewind_target_index):
+                # After rewinding, request blocks again from our new height.
                 new_height = len(blockchain.chain)
-                logger.info(f"Requesting blocks again from new height: {new_height}")
+                logger.info(f"Requesting blocks from new height {new_height} to find common root.")
                 request = {"type": "GET_BLOCKS", "payload": {"start": new_height}}
                 send_message(sock, request)
             else:
-                logger.error("Failed to rewind chain, cannot resolve fork.")
-
-def handle_new_block(blockchain: Blockchain, payload: dict[str, Any], peer_id: str, broadcast_callback: Any) -> None:
-    """Handle a new single block announcement from a peer."""
-    if not isinstance(payload, dict) or 'block' not in payload:
-        logger.error(f"Invalid new block payload from peer {peer_id}")
-        return
-
-    block_dict = payload.get('block')
-    if any(b.current_hash == block_dict.get('current_hash') for b in blockchain.chain):
-        return
-
-    try:
-        new_block = Block.from_dict(block_dict)
-        if blockchain.is_new_block_valid(new_block, blockchain.get_latest_block()):
-            blockchain.chain.append(new_block)
-            blockchain.add_block_to_index(new_block)
-            blockchain.save_chain()
-            logger.info(f"Accepted and added new block #{new_block.index} from peer {peer_id}")
-            broadcast_callback({'type': 'NEW_BLOCK', 'payload': {'block': block_dict}}, exclude_peer=peer_id)
-    except Exception as e:
-        logger.error(f"Error processing new block from peer {peer_id}: {str(e)}")
+                # If rewind fails, fall back to a full sync.
+                logger.error("Failed to rewind chain, requesting full chain sync.")
+                request = {"type": "GET_BLOCKS", "payload": {"start": 0}}
+                send_message(sock, request)

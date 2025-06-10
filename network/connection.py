@@ -19,12 +19,29 @@ class ConnectionManager:
         self.sockets_lock = threading.RLock()
         self.retries_lock = threading.Lock()
         self.connection_lock = threading.Lock()
+        self.sync_lock = threading.Lock()
         self.peers = {}
         self.connected_sockets = {}
         self.connection_retries = {}
         self.connection_states = {}
         self.max_retries = 3
+        self.sync_in_progress = False
+        os.makedirs(os.path.dirname(PEERS_FILE), exist_ok=True)
         self.load_peers()
+        
+    def initialize_connections(self):
+        """Initialize connections to all known peers."""
+        # Attempt to connect to all known peers
+        for peer_id, (host, port) in self.peers.items():
+            try:
+                logger.info(f"Attempting initial connection to peer {peer_id[:8]} at {host}:{port}")
+                self.connect_to_peer(host, port)
+            except Exception as e:
+                logger.error(f"Failed initial connection to peer {peer_id[:8]}: {e}")
+                # Add to retry queue if connection fails
+                with self.retries_lock:
+                    self.connection_retries[peer_id] = 0
+
 
     def load_peers(self):
         """Load known peers from file"""
@@ -53,22 +70,35 @@ class ConnectionManager:
             logger.error(f"Error saving peers: {e}")
 
     def _initiate_sync_if_needed(self, sock: socket.socket, peer_id: str, peer_chain_height: int) -> None:
-        """Compares local chain height with a peer's and sends a GET_BLOCKS request if behind."""
-        with self.node.blockchain.lock:
-            our_height: int = len(self.node.blockchain.chain)
-        
-        logger.info(
-            f"Checking if sync is needed for peer {peer_id[:8]}... "
-            f"[Our Height: {our_height}, Peer Height: {peer_chain_height}]"
-        )
-        
-        if peer_chain_height > our_height:
-            logger.info(f"Our chain is shorter. Requesting blocks from peer {peer_id[:8]} starting at block {our_height}.")
-            request = {
-                "type": "GET_BLOCKS",
-                "payload": {"start": our_height}
-            }
-            send_message(sock, request)
+        """Compares local chain height with a peer's and sends a GET_BLOCKS request if behind. Only one sync allowed at a time."""
+        with self.sync_lock:
+            if self.sync_in_progress:
+                logger.info(f"Sync already in progress. Skipping sync for peer {peer_id[:8]}.")
+                return
+            self.sync_in_progress = True
+        try:
+            with self.node.blockchain.lock:
+                our_height: int = len(self.node.blockchain.chain)
+            
+            logger.info(
+                f"Checking if sync is needed for peer {peer_id[:8]}... "
+                f"[Our Height: {our_height}, Peer Height: {peer_chain_height}]"
+            )
+            
+            if peer_chain_height > our_height:
+                logger.info(f"Our chain is shorter. Requesting blocks from peer {peer_id[:8]} starting at block {our_height}.")
+                request = {
+                    "type": "GET_BLOCKS",
+                    "payload": {"start": our_height}
+                }
+                send_message(sock, request)
+        finally:
+                        self.sync_in_progress = False
+
+    def sync_complete(self):
+        """This method will be called when a sync process is finished to allow new syncs."""
+        with self.sync_lock:
+            self.sync_in_progress = False
 
     def update_connection_state(self, peer_id: str, state: str) -> None:
         """Update the connection state of a peer and log the change."""
