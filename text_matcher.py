@@ -135,7 +135,8 @@ def find_text_matches(
     if matches:
         total_matched_chars = sum(match['length'] for match in matches)
         max_length = max(len(original_clean), len(modified_clean))
-        pattern_boost = min(20, (total_matched_chars / max_length) * 50)  # Up to 20% boost
+        # FIX: Reduced the pattern boost cap and multiplier to be less aggressive.
+        pattern_boost = min(4, (total_matched_chars / max_length) * 25)
         similarity = min(100, base_similarity + pattern_boost)
     else:
         similarity = base_similarity
