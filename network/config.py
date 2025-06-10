@@ -5,7 +5,7 @@ from logging_config import logging
 
 logger: 'logging.Logger' = logging.getLogger("network")
 
-# Network configuration constants
+
 PEERS_FILE: str = os.path.join("data", "network", "peers.json")
 SOCKET_TIMEOUT: int = 30
 PING_INTERVAL: int = 25
@@ -17,3 +17,6 @@ MAGIC_NUMBER_LEN: int = len(MAGIC_NUMBER)
 LENGTH_PREFIX_LEN: int = 4
 MAX_ALLOWED_PAYLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB size
 MAX_REWIND_DEPTH = 2000
+MAX_RETRIES = 3  
+RETRY_DELAY = 120 
+MINING_LOCK_TIMEOUT: int = 600

@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
+import sys
 
 from blockchain import Blockchain
 from network.node import BlockchainNode
@@ -56,13 +57,14 @@ class DocValidatorApp:
             logger.info(f"Network node started on port {self.DEFAULT_PORT}")
             self.blockchain.set_node(self.network_node)
             print(f"Network running stat: {self.network_node.running}")
-            print(f"Network node started on port {self.DEFAULT_PORT}")
+            print(f"Network node successfully started on port {self.DEFAULT_PORT}")
         except Exception as e:
-            logger.warning(f"Could not start network node: {e}")
-            print(f"{Colors.YELLOW}Warning: Could not start network node: {e}{Colors.RESET}")
-            print("Running in standalone mode. Network features will be unavailable.")
-            # TODO add logic to stop start up if network node does not start properly
-            self.network_node = None
+            logger.critical(f"A fatal error occurred while starting the network node: {e}")
+            print(f"\n{Colors.RED}Fatal Error: Could not start network node: {e}{Colors.RESET}")
+            print("The application cannot continue without the network component.")
+            print("Please ensure the port is not in use or check your network configuration.")
+            print("Exiting application...")
+            sys.exit(1)
 
     def _clear_terminal(self):
         """Clears the terminal screen without triggering signal handlers."""
@@ -154,7 +156,8 @@ class DocValidatorApp:
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ).decode('utf-8')
         
-        print("\nQueuing blocks for mining...")
+        print("\nPreparing document for mining...")
+        document_tasks = []
         for i, page_content in enumerate(pages):
             data = {
                 'title': title,
@@ -162,14 +165,19 @@ class DocValidatorApp:
                 'content': page_content,
                 'public_key': public_key_pem
             }
-            page_signature_dp = generate_dp_page_signature(page_content, title, i + 1) #
-            signature = sign_data(page_signature_dp, private_key) #
-            self.mining_worker.add_block_task(data=data, signature=signature)
-        
-        logger.info(f"Queued {len(pages)} pages for mining for document '{title}'")
-        print(f"\n{Colors.GREEN}All {len(pages)} pages have been queued for mining.{Colors.RESET}")
+            page_signature_dp = generate_dp_page_signature(page_content, title, i + 1)
+            signature = sign_data(page_signature_dp, private_key)
+            document_tasks.append({'data': data, 'signature': signature})
+
+        # Add the entire document as a single task
+        if document_tasks:
+            self.mining_worker.add_document_task(document_tasks)
+            logger.info(f"Queued document '{title}' with {len(pages)} pages for mining.")
+            print(f"\n{Colors.GREEN}Document '{title}' with {len(pages)} pages has been queued for mining.{Colors.RESET}")
+        else:
+            print(f"\n{Colors.YELLOW}No pages found to queue for mining.{Colors.RESET}")
+
         print("The mining process will continue in the background.")
-        print("You can monitor the status on the main menu.")
         input("\nPress Enter to return to the main menu...")
 
     def _verify_document(self):

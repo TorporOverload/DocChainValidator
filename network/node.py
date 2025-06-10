@@ -8,7 +8,7 @@ from blockchain import Blockchain
 from block import Block
 from mining_worker import BlockMiningWorker
 
-from .config import logger, CHUNK_SIZE, MAX_BLOCKS, SOCKET_TIMEOUT
+from .config import logger, CHUNK_SIZE, MAX_BLOCKS, SOCKET_TIMEOUT, MINING_LOCK_TIMEOUT
 from .connection import ConnectionManager
 from .protocol import send_message, receive_message
 from .sync import handle_blocks
@@ -148,6 +148,45 @@ class BlockchainNode:
         }
         logger.debug(f"Network stats: {stats}")
         return stats
+    
+    def broadcast_mining_start(self) -> None:
+        """Broadcasts that this node has acquired the mining lock."""
+        logger.info("Broadcasting MINING_START to peers.")
+        message: dict[str, Any] = {"type": "MINING_START", "payload": {}}
+        self.connection_manager.broadcast_to_peers(message)
+
+    def broadcast_mining_finish(self) -> None:
+        """Broadcasts that this node has finished mining and released the lock."""
+        logger.info("Broadcasting MINING_FINISH to peers.")
+        message: dict[str, Any] = {"type": "MINING_FINISH", "payload": {}}
+        self.connection_manager.broadcast_to_peers(message)
+
+    def request_mining_lock(self) -> bool:
+        """Attempts to acquire the network-wide mining lock for this node."""
+        with self.connection_manager.network_mining_lock:
+            if self.connection_manager.network_mining_in_progress:
+                # Lock is already held
+                logger.debug(f"Could not acquire mining lock, currently held by peer {self.connection_manager.mining_lock_peer_id[:8]}")
+                return False
+            
+            # Acquire lock for this node
+            self.connection_manager.network_mining_in_progress = True
+            self.connection_manager.mining_lock_peer_id = self.peer_id
+            
+            # long-duration timer as a failsafe
+            if self.connection_manager.mining_lock_timer:
+                self.connection_manager.mining_lock_timer.cancel()
+            
+            self.connection_manager.mining_lock_timer = threading.Timer(
+                MINING_LOCK_TIMEOUT, 
+                self.connection_manager.release_mining_lock
+            )
+            self.connection_manager.mining_lock_timer.start()
+            
+            # Announce to the network
+            self.broadcast_mining_start()
+            logger.info(f"Successfully acquired network mining lock with a {MINING_LOCK_TIMEOUT}s timeout.")
+            return True
 
     def _handle_peer_connection(self, sock: socket.socket, peer_id: str) -> None:
         """Handle messages from a connected peer."""
@@ -157,12 +196,7 @@ class BlockchainNode:
         try:
             while self.running:
                 try:
-                    # Set a timeout for receiving messages
-                    sock.settimeout(SOCKET_TIMEOUT)
-                    
-                    # Get the next message
                     message = receive_message(sock)
-                    
                     msg_type = message.get('type', '').lower()
                     payload = message.get('payload', {})
                     
@@ -170,7 +204,6 @@ class BlockchainNode:
                         logger.warning(f"Peer {peer_id} no longer in connected_sockets during message processing.")
                         return
 
-                    # Handle different message types
                     if msg_type == 'ping':
                         with self.blockchain.lock:
                             latest_block = self.blockchain.get_latest_block()
@@ -189,25 +222,28 @@ class BlockchainNode:
                     elif msg_type == 'blocks':
                         handle_blocks(sock, self.blockchain, payload, peer_id)
                     elif msg_type == 'new_block':
-                        self.handle_new_block(payload, peer_id,
-                                     self.connection_manager.broadcast_to_peers)
+                        self.handle_new_block(payload, peer_id, self.connection_manager.broadcast_to_peers)
+                    elif msg_type == 'mining_start':
+                        self.connection_manager.acquire_mining_lock_from_peer(peer_id)
+                    elif msg_type == 'mining_finish':
+                        self.connection_manager.handle_mining_finish(peer_id)
                     elif msg_type == 'pong':
                         logger.debug(f"Received PONG from {peer_id[:8]}")
                         with self.blockchain.lock:
                             our_height = len(self.blockchain.chain)
                             latest_block = self.blockchain.get_latest_block()
                             our_hash = latest_block.current_hash if latest_block else "0"
-
+                            
                         peer_height = payload.get("chain_height", 0)
                         peer_hash = payload.get("latest_hash", "")
-
+                        
                         # Only trigger sync if not already in progress
                         if not self.connection_manager.sync_in_progress:
                             # Scenario 1: Peer has a longer chain.
                             if peer_height > our_height:
                                 logger.info(f"PONG from {peer_id[:8]} shows they have a longer chain. Requesting sync.")
                                 self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
-                            # Scenario 2: Same height, but different blocks (a fork).
+                                # Scenario 2: Same height, but different blocks
                             elif peer_height == our_height and peer_hash != our_hash:
                                 logger.info(f"PONG from {peer_id[:8]} shows a fork at the same height. Requesting sync.")
                                 self.connection_manager._initiate_sync_if_needed(sock, peer_id, peer_height)
@@ -217,19 +253,15 @@ class BlockchainNode:
                         if msg_type:
                             logger.warning(f"Unknown message type '{msg_type}' from peer {peer_id}")
                 except socket.timeout:
-                    # No data received within timeout, check if still running
                     if not self.running:
                         break
                     continue
-                    
                 except (ConnectionError, IOError, OSError) as e:
                     logger.error(f"Connection error with peer {peer_id} in handler: {e}")
                     break
-                    
                 except UnicodeDecodeError as e:
                     logger.error(f"UnicodeDecodeError from peer {peer_id}: {e}")
                     continue
-                    
                 except Exception as e:
                     logger.error(f"Unexpected error handling message from peer {peer_id}: {e}")
                     break
@@ -306,7 +338,8 @@ class BlockchainNode:
         try:
             new_block = Block.from_dict(block_dict)
             if self.blockchain.is_new_block_valid(new_block, self.blockchain.get_latest_block()):
-                logger.info(f"Valid new block #{new_block.index} received. Interrupting local mining.")
+                logger.info(f"Valid new block #{new_block.index} received. Interrupting local mining if active.")
+                
                 try:
                     if hasattr(self, 'mining_worker') and self.mining_worker:
                         self.mining_worker.interrupt_current_task()

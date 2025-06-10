@@ -230,6 +230,7 @@ class Blockchain:
                         self.logger.error(f"Failed to broadcast block #{new_block.index}: {str(e)}")
                 else:
                     self.logger.warning("No node configured - block will not be broadcast")
+                return new_block
             else:
                 self.logger.error(f"New block #{new_block.index} was invalid. Not added.")
                 return None
