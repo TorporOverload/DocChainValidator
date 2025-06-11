@@ -3,21 +3,21 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature, InvalidKey
-from text_matcher import separate_sentences
 import getpass
 import os
 from typing import Optional, Tuple, Any
+from DPDocSigner import generate_dp_page_signature, get_dp_signature_details, verify_dp_signature_integrity
+
 
 KEY_PATH = os.path.join("data", "keys")
-DP_SEED_CONSTANT = "9ca57ab0545f346b422ebf7fe6be7b9a5e11f214a1e575bfc0db081f4b5fa0ec"
 
 def sign_data(dp_signature: str, private_key: Any) -> str:
     """
     Sign the data using the provided private key.
     
     Args:
-        data (str): The data to be signed.
-        private_key (str): The private key used for signing.
+        dp_signature (str): The DP signature to be signed.
+        private_key (Any): The private key used for signing.
         
     Returns:
         str: The signature of the data.
@@ -36,22 +36,21 @@ def sign_data(dp_signature: str, private_key: Any) -> str:
 
 def verify_signature(dp_signature: str, signature: str, public_key: Any) -> bool:
     """
-    
     Verify the signature of the data using the provided public key.
     
     Args:
-        data (str): The data whose signature is to be verified.
+        dp_signature (str): The DP signature whose signature is to be verified.
         signature (str): The signature to be verified.
-        public_key (str): The public key used for verification.
+        public_key (Any): The public key used for verification.
     
-    returns:
+    Returns:
         bool: True if the signature is valid, False otherwise.
     """
     message = dp_signature.encode("utf-8")
-    signature = bytes.fromhex(signature)
+    signature_bytes = bytes.fromhex(signature)
     try:
         public_key.verify(
-            signature,
+            signature_bytes,
             message,
             padding.PSS(
                 mgf=padding.MGF1(hashes.SHA256()),
@@ -59,10 +58,8 @@ def verify_signature(dp_signature: str, signature: str, public_key: Any) -> bool
             ),
             hashes.SHA256()
         )
-        # print(f"Signature verified successfully: {signature}")
         return True
     except InvalidSignature:
-        # print(f"Signature verification failed: {signature}")
         return False
 
 def username_exists(username: str) -> bool:
@@ -78,7 +75,7 @@ def username_exists(username: str) -> bool:
     return False
 
 def generate_key_pair() -> None:
-    """Generate a public/private RSA 2048-bit key pair and encrypt the private key."""
+    """Generate a public/private RSA 4096-bit key pair and encrypt the private key."""
 
     # Get a valid username
     while True:
@@ -114,7 +111,7 @@ def generate_key_pair() -> None:
     # Encrypt and serialize the private key
     pem_private = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
-        format=serialization.PrivateFormat.TraditionalOpenSSL,  # or PKCS8
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
         encryption_algorithm=serialization.BestAvailableEncryption(password.encode('utf-8'))
     )
 
@@ -200,6 +197,7 @@ def get_keypair_by_username(username: str) -> Tuple[Optional[Any], Optional[Any]
     except (ValueError, InvalidKey) as e:
         print(f"Error loading private key for {username}: {e}")
         return None, None
+    
     with open(public_key_path, "rb") as file:
         public_key_data = file.read()
     
@@ -207,56 +205,41 @@ def get_keypair_by_username(username: str) -> Tuple[Optional[Any], Optional[Any]
     
     return private_key, public_key
 
-    
-    
-def generate_dp_page_signature(page_text: str, doc_title: str, page_number: int) -> str:
-    """
-    Generates a page signature using Dynamic Programming and Hashing.
-    """    # Split into sentences for more natural chunking
-    page_chunks = separate_sentences(page_text)
-    
-    if not page_text: 
-        empty_page_material = (doc_title + str(page_number) + DP_SEED_CONSTANT + "EMPTY_PAGE_PLACEHOLDER").encode('utf-8')
-        digest = hashes.Hash(hashes.SHA256())
-        digest.update(empty_page_material) 
-        hash_bytes = digest.finalize()
-        return hash_bytes.hex()
-    
-    initial_seed = (doc_title + str(page_number) + DP_SEED_CONSTANT).encode('utf-8')
-    dp_signature = hashes.Hash(hashes.SHA256())
-    dp_signature.update(initial_seed)
-    dp_signature = dp_signature.finalize()
-    dp_signature = dp_signature.hex()
-    
-    for chunk in page_chunks:
-        
-        data_to_hash = (chunk + dp_signature).encode('utf-8')
-        
-        dp_signature = hashes.Hash(hashes.SHA256())
-        dp_signature.update(data_to_hash)
-        dp_signature = dp_signature.finalize()
-        dp_signature = dp_signature.hex()
-    
-    return dp_signature
-    
-    
-    
-    
 # if __name__ == "__main__":
-#     # Example usage
-#     # generate_key_pair()
+#     # testing the DP signature system
+#     sample_text = "This is the first 5entence. This is the second sentence. This is the third sentence."
+#     doc_title = "Test Document"
+#     page_number = 1
+    
+#     print("=== Testing DP Document Signing System ===\n")
+    
+#     # Generate DP signature
+#     dp_signature = generate_dp_page_signature(sample_text, doc_title, page_number)
+#     print(f"Generated DP Signature: {dp_signature[:32]}...\n")
+    
+#     # Show DP details
+#     details = get_dp_signature_details()
+#     print("DP Signature Chain:")
+#     for detail in details["signature_chain"]:
+#         print(f"  Step {detail['step_id']}: {detail['cumulative_signature']} (deps: {detail['dependencies']})")
+    
+#     print(f"\nTotal DP steps: {details['total_steps']}")
+#     print(f"Cache efficiency: {details['cache_size']} cached computations")
+    
+#     # Verify integrity
+#     integrity_results = verify_dp_signature_integrity()
+#     print(f"\nIntegrity verification:")
+#     for step_id, is_valid in integrity_results.items():
+#         print(f"  Step {step_id}: {'✓ Valid' if is_valid else '✗ Invalid'}")
+    
+#     print("\n" + "="*50)
+#     print("DP signature generation complete!")
+    
 
-#     attempts = 0
-#     username = input("Enter username to load keys: ")
-#     private_key, public_key = get_keypair_by_username(username)
-#     while (private_key is None or public_key is None) and attempts < 3:
-#         if attempts > 0: # Only ask for username again if it's not the first try
-#             username = input("Enter a valid username to load keys: ")
-#         private_key, public_key = get_keypair_by_username(username)
-#         attempts += 1
-#     if private_key is None or public_key is None:
-#         print("Failed to load keys after 3 attempts.")
-#         exit(1) # ewfrgetfnh
-        
-# reference:       
-# https://dev.to/u2633/the-flow-of-creating-digital-signature-and-verification-in-python-37ng
+    # generate_key_pair()
+    # username = input("Enter username to load keys: ")
+    # private_key, public_key = get_keypair_by_username(username)
+    # if private_key and public_key:
+    #     signature = sign_data(dp_signature, private_key)
+    #     is_valid = verify_signature(dp_signature, signature, public_key)
+    #     print(f"Cryptographic signature valid: {is_valid}")
