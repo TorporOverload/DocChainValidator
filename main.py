@@ -31,7 +31,7 @@ class Colors:
     YELLOW = '\033[93m'
     BLUE = '\033[94m'
     RESET = '\033[0m'
-
+    
 class DocValidatorApp:
     """
     Encapsulates the MNU Digital Document Blockchain System application.
@@ -214,7 +214,7 @@ class DocValidatorApp:
         
         doc_blocks = []
         tampered_pages = {}
-        title_blocks = self.blockchain.get_blocks_by_title(title) #
+        title_blocks = self.blockchain.get_blocks_by_title(title)
         if title_blocks:
             print("Found blocks for document title, checking for tampering...")
             doc_blocks, tampered_pages = self._check_for_pages_by_content(pages, title_blocks)
@@ -247,7 +247,7 @@ class DocValidatorApp:
             
             for block in doc_blocks:
                 if block.data.get('page') == i and block.data.get('content','').strip() == page_content.strip():
-                    page_signature_dp = generate_dp_page_signature( #
+                    page_signature_dp = generate_dp_page_signature(
                         block.data['content'],
                         block.data['title'],
                         block.data['page'] + 1 
@@ -256,7 +256,7 @@ class DocValidatorApp:
                         block.data['public_key'].encode('utf-8'),
                         backend=default_backend()
                     )
-                    if verify_signature(page_signature_dp, block.signature, public_key): #
+                    if verify_signature(page_signature_dp, block.signature, public_key):
                         print(f"{Colors.GREEN}✓ Page {i+1} verified successfully.{Colors.RESET}")
                         print(f"  Block #{block.index}, Timestamp: {datetime.fromtimestamp(block.timestamp)}")
                         verified_pages_indices.add(i)
@@ -264,34 +264,54 @@ class DocValidatorApp:
                     else:
                         print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - Signature invalid for exact content match.{Colors.RESET}")
                         tampered_pages[i] = {
-                            'original': block.data['content'], 'modified': page_content, 'block': block,
-                            'similarity': 100.0, 'matches': []
+                            'original': block.data['content'], 
+                            'modified': page_content, 
+                            'block': block,
+                            'similarity': 100.0, 
+                            'matches': [],
+                            'reason': 'signature_invalid'
                         }
                     break 
             
             if page_verified_this_iteration:
                 continue
-
-            if i in tampered_pages:
-                info = tampered_pages[i]
-                print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - Content has been modified.{Colors.RESET}")
-                print(f"  {Colors.YELLOW}Found similar content in Block #{info['block'].index} with {info['similarity']:.1f}% similarity.{Colors.RESET}")
+               
             elif not any(b.data.get('page') == i for b in doc_blocks):
-                 print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - No matching block found in the blockchain.{Colors.RESET}")
+                print(f"{Colors.RED}✗ Page {i+1} VERIFICATION FAILED - No matching block found in the blockchain.{Colors.RESET}")
+                print("This page does not exist in any registered version of this document.")
 
-
-        print("\n--- Verification Summary ---")
+        # Enhanced summary section
+        print(f"\n{Colors.CYAN}=== VERIFICATION SUMMARY ==={Colors.RESET}")
+        print(f"Document Title: {title}")
         print(f"Total Pages in Document: {len(pages)}")
-        print(f"{Colors.GREEN}Verified Pages: {len(verified_pages_indices)}{Colors.RESET}")
-        unverified_count = len(pages) - len(verified_pages_indices)
-        print(f"{Colors.RED}Unverified/Tampered Pages: {unverified_count}{Colors.RESET}")
+        print(f"{Colors.GREEN}✓ Verified Pages: {len(verified_pages_indices)}{Colors.RESET}")
         
+        unverified_count = len(pages) - len(verified_pages_indices)
+        if unverified_count > 0:
+            print(f"{Colors.RED}✗ Unverified/Tampered Pages: {unverified_count}{Colors.RESET}")
+            
+            # List the specific page numbers that failed
+            failed_pages = [i+1 for i in range(len(pages)) if i not in verified_pages_indices]
+            print(f"  Failed pages: {', '.join(map(str, failed_pages))}")
+            
+            # Categorize the failures
+            tampered_count = len(tampered_pages)
+            missing_count = unverified_count - tampered_count
+            
+            if tampered_count > 0:
+                print(f"  - {tampered_count} pages were tampered with")
+            if missing_count > 0:
+                print(f"  - {missing_count} pages not found in blockchain")
+        
+        # Final verdict
         if unverified_count == 0:
             print(f"\n{Colors.GREEN}✓ DOCUMENT IS VALID - All pages verified successfully.{Colors.RESET}")
+            logger.info(f"Document verification successful: {title}")
         else:
             print(f"\n{Colors.RED}✗ DOCUMENT IS INVALID - Some pages failed verification or were tampered with.{Colors.RESET}")
+            logger.warning(f"Document verification failed: {title} - {unverified_count} pages failed")
             
-        print(f"\nVerification completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"\nVerification completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")        
         input("\nPress Enter to continue...")
 
     def _check_for_pages_by_content(self, pages, blocks_to_check):
@@ -340,10 +360,10 @@ class DocValidatorApp:
                     candidate_matches_info = matches # Store matches for potential display
             
             if candidate_tampered_block:
-                 # Check if this block was already assigned as an exact match to another page
-                 is_candidate_block_used_exact = any(b.index == candidate_tampered_block.index for b in matching_blocks_for_doc)
+                # Check if this block was already assigned as an exact match to another page
+                is_candidate_block_used_exact = any(b.index == candidate_tampered_block.index for b in matching_blocks_for_doc)
 
-                 if not is_candidate_block_used_exact:
+                if not is_candidate_block_used_exact:
                     tampered_info[page_idx] = {
                         'original': candidate_tampered_block.data['content'],
                         'modified': page_content_current_doc,
