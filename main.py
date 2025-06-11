@@ -82,17 +82,52 @@ class DocValidatorApp:
             exit(0)
 
     def _shutdown(self):
-        logger.info("Shutting down application. Saving blockchain and stopping network node if running.")
+        """
+        Handles the graceful shutdown of the application, ensuring all tasks are
+        completed before exiting.
+        """
+        # Wait for the mining worker to finish its queue before shutting down.
+        if self.mining_worker and (not self.mining_worker.task_queue.empty() or self.mining_worker.working):
+            print(f"\n{Colors.YELLOW}Pending mining tasks detected. Waiting for completion before shutdown...{Colors.RESET}")
+            logger.info("Shutdown initiated, but waiting for mining queue to empty.")
+
+            while not self.mining_worker.task_queue.empty() or self.mining_worker.working:
+                try:
+                    q_size = self.mining_worker.task_queue.qsize()
+                    if q_size > 0:
+                        status_msg = f"Waiting for {q_size} document(s) to be mined..."  
+                    else: 
+                        status_msg = "Waiting for the current task to finish..."
+                    print(f"\r{status_msg}", end="")
+                    sleep(1)
+                except (KeyboardInterrupt, SystemExit):
+                    print("\n\nForce exit detected. Shutting down immediately.")
+                    logger.error("Forced shutdown during mining task wait.")
+                    break  # Exit the waiting loop to proceed with immediate shutdown
+
+            print(f"\n{Colors.GREEN}All mining tasks completed.{Colors.RESET}")
+            logger.info("Mining queue is now empty. Proceeding with shutdown.")
+
+        logger.info("Shutting down application. Saving blockchain and stopping components.")
         print("Saving blockchain...")
         self.blockchain.save_chain()
         print("Blockchain saved.")
+
         if self.network_node and hasattr(self.network_node, 'stop'):
             print("Stopping network node...")
             self.network_node.stop()
             logger.info("Network node stopped.")
             print("Network node stopped.")
+
+        if self.mining_worker and hasattr(self.mining_worker, 'stop'):
+            print("Stopping mining worker...")
+            self.mining_worker.stop()
+            logger.info("Mining worker stopped.")
+            print("Mining worker stopped.")
+
         print("Exiting the system...")
         sleep(1)
+
 
     def _sign_document(self):
         self._clear_terminal()
@@ -281,7 +316,7 @@ class DocValidatorApp:
                 print("This page does not exist in any registered version of this document.")
 
         # Enhanced summary section
-        print(f"\n{Colors.CYAN}=== VERIFICATION SUMMARY ==={Colors.RESET}")
+        print(f"\n{Colors.BLUE}=== VERIFICATION SUMMARY ==={Colors.RESET}")
         print(f"Document Title: {title}")
         print(f"Total Pages in Document: {len(pages)}")
         print(f"{Colors.GREEN}✓ Verified Pages: {len(verified_pages_indices)}{Colors.RESET}")

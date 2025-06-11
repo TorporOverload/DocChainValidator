@@ -167,15 +167,13 @@ class DPDocumentSigner:
             })
         return chain
 
-# Global DP signer instance
-dp_signer = DPDocumentSigner()
 
 def generate_dp_page_signature(page_text: str, doc_title: str, page_number: int) -> str:
     """
     Generates a page signature using True Dynamic Programming and Hashing.
     This replaces the original sequential approach with proper DP structure.
     """
-    global dp_signer
+    dp_signer = DPDocumentSigner() # changed to instance variable due to crashes in multi-threaded environments
     
     if not page_text:
         # Handle empty page case

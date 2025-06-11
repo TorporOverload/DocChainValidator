@@ -49,7 +49,7 @@ def setup_logging():
 
     # Create a dedicated blockchain log file handler
     blockchain_logger = logging.getLogger("blockchain")
-    blockchain_logger.setLevel(logging.INFO)
+    blockchain_logger.setLevel(logging.WARNING)
     blockchain_logger.handlers.clear()  # Clear any existing handlers
     
     blockchain_log_handler = logging.FileHandler(os.path.join(LOG_PATH, "blockchain.log"))
