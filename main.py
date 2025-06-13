@@ -52,7 +52,7 @@ class DocValidatorApp:
     def _initialize_network_node(self):
         """Initializes and starts the network node."""
         try:
-            self.network_node = BlockchainNode("localhost", self.DEFAULT_PORT, self.blockchain, self.mining_worker)
+            self.network_node = BlockchainNode("0.0.0.0", self.DEFAULT_PORT, self.blockchain, self.mining_worker)
             self.network_node.start()
             logger.info(f"Network node started on port {self.DEFAULT_PORT}")
             self.blockchain.set_node(self.network_node)
